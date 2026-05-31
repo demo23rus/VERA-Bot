@@ -1802,7 +1802,7 @@ async def ask_claude(question: str, depth: str) -> str:
         logging.error(f"Claude ошибка: {e}")
         return "Произошла ошибка при обращении к AI. Попробуйте позже."
 
-async def analyze_photo_gpt(photo_url: str, photo_type: str) -> str:
+async def analyze_photo_gpt(photo_url: str, photo_type: str, local_path: str = None) -> str:
     if photo_type == "church":
         prompt = (
             "На фотографии православный храм или монастырь. "
@@ -1820,13 +1820,28 @@ async def analyze_photo_gpt(photo_url: str, photo_type: str) -> str:
             "Если на фото не икона — вежливо скажи об этом. Отвечай по-русски."
         )
     try:
+        import base64
+        # Читаем локальный файл и кодируем в base64
+        if local_path:
+            with open(local_path, "rb") as f:
+                image_data = base64.b64encode(f.read()).decode("utf-8")
+            image_content = {
+                "type": "image_url",
+                "image_url": {"url": f"data:image/jpeg;base64,{image_data}"}
+            }
+        else:
+            image_content = {
+                "type": "image_url",
+                "image_url": {"url": photo_url}
+            }
+
         response = await openai_client.chat.completions.create(
             model="gpt-4o",
             messages=[{
                 "role": "user",
                 "content": [
-                    {"type": "text",      "text": prompt},
-                    {"type": "image_url", "image_url": {"url": photo_url}},
+                    {"type": "text", "text": prompt},
+                    image_content,
                 ]
             }],
             max_tokens=800
@@ -3078,15 +3093,21 @@ async def handle_photo(message: Message):
         )
         return
 
-    photo    = message.photo[-1]
-    file     = await bot.get_file(photo.file_id)
-    file_url = f"https://api.telegram.org/file/bot{BOT_TOKEN}/{file.file_path}"
+    photo      = message.photo[-1]
+    file       = await bot.get_file(photo.file_id)
+    local_path = f"/tmp/vera_photo_{user_id}.jpg"
     photo_type = "church" if step == "photo_church" else "icon"
 
     set_step(user_id, "idle")
     await message.answer("⏳ Анализирую фото...")
 
-    result = await analyze_photo_gpt(file_url, photo_type)
+    try:
+        await bot.download_file(file.file_path, local_path)
+        result = await analyze_photo_gpt("", photo_type, local_path=local_path)
+    except Exception as e:
+        logging.error(f"Ошибка скачивания фото: {e}")
+        result = "Не удалось загрузить фото. Попробуйте ещё раз."
+
     if not plan:
         increment_limit(user_id, "photo_requests")
 
