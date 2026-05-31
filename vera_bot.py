@@ -1377,7 +1377,7 @@ def main_menu():
             InlineKeyboardButton(text="❓ Задать вопрос",      callback_data="ask_question"),
         ],
         [
-            InlineKeyboardButton(text="🕯️ Поддержать проект", callback_data="donate"),
+            InlineKeyboardButton(text="🕯️ Пожертвование на развитие проекта", callback_data="donate"),
         ],
     ])
 
