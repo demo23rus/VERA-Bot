@@ -1376,6 +1376,9 @@ def main_menu():
             InlineKeyboardButton(text="👤 Мой профиль",        callback_data="profile"),
             InlineKeyboardButton(text="❓ Задать вопрос",      callback_data="ask_question"),
         ],
+        [
+            InlineKeyboardButton(text="🕯️ Поддержать проект", callback_data="donate"),
+        ],
     ])
 
 def back_menu():
@@ -1803,8 +1806,13 @@ async def cb_onboard_skip(callback: CallbackQuery):
     await callback.message.answer(
         "☦️ Хорошо! Вы всегда можете заполнить профиль позже\n"
         "в разделе «👤 Мой профиль».\n\n"
-        "Чем могу помочь?",
-        reply_markup=main_menu()
+        "Чем могу помочь?\n\n"
+        "🕯️ Если бот будет полезен — вы можете поддержать\n"
+        "его развитие во славу Божию.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="☦️ Открыть меню",        callback_data="main_menu")],
+            [InlineKeyboardButton(text="🕯️ Поддержать проект",   callback_data="donate")],
+        ])
     )
     await callback.answer()
 
@@ -2326,24 +2334,58 @@ async def cb_fav_view(callback: CallbackQuery):
     await callback.answer()
 
 # ========== ПОЖЕРТВОВАНИЕ ==========
-@dp.callback_query(F.data == "donation")
+@dp.callback_query(F.data.in_({"donation", "donate"}))
 async def cb_donation(callback: CallbackQuery):
+    set_step(callback.from_user.id, "donate_amount")
     await callback.message.answer(
         "🕯️ *Пожертвование на развитие проекта*\n"
-        "*во славу Божию*\n\n"
+        "*во славу Божию* ☦️\n\n"
         "Если бот помогает вам в духовной жизни —\n"
         "вы можете поддержать его развитие.\n\n"
         "Каждое пожертвование помогает:\n"
-        "— Пополнять базу молитв и житий\n"
+        "— Пополнять базу молитв и житий святых\n"
         "— Добавлять новые функции\n"
         "— Поддерживать сервер\n\n"
-        "💳 Для пожертвования свяжитесь:\n"
-        f"@Boss023rus\n\n"
-        "Спаси Господи! 🙏",
+        "Введите сумму в рублях цифрой:\n"
+        "Например: *100* или *500*",
         parse_mode="Markdown",
-        reply_markup=back_section("profile")
+        reply_markup=back_menu()
     )
     await callback.answer()
+
+async def donation_monthly_loop():
+    """Рассылка пожертвований раз в месяц"""
+    await asyncio.sleep(60)
+    while True:
+        now = datetime.now()
+        if now.day == 1 and now.hour == 12 and now.minute == 0:
+            conn = sqlite3.connect(DB_PATH)
+            c    = conn.cursor()
+            c.execute("SELECT user_id FROM users")
+            users = c.fetchall()
+            conn.close()
+            for (user_id,) in users:
+                try:
+                    await bot.send_message(
+                        user_id,
+                        "☦️ *Дорогой друг!*\n\n"
+                        "Благодарим что вы с нами.\n"
+                        "Если бот «С верой» помогает вам\n"
+                        "в духовной жизни — вы можете\n"
+                        "поддержать его развитие.\n\n"
+                        "Любая сумма — это большая помощь 🕯️",
+                        parse_mode="Markdown",
+                        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                            [InlineKeyboardButton(
+                                text="🕯️ Поддержать проект",
+                                callback_data="donate"
+                            )],
+                        ])
+                    )
+                    await asyncio.sleep(0.1)
+                except Exception:
+                    pass
+        await asyncio.sleep(60 - datetime.now().second)
 
 # ========== ВОПРОС AI ==========
 @dp.callback_query(F.data == "ask_question")
@@ -2711,6 +2753,55 @@ async def handle_text(message: Message):
         set_step(user_id, "idle")
         return
 
+    # Пожертвование — ввод суммы
+    if step == "donate_amount":
+        try:
+            amount = int(text.strip())
+            if amount < 10:
+                await message.answer(
+                    "⚠️ Минимальная сумма пожертвования — 10 рублей.\n"
+                    "Введите сумму цифрой:",
+                    reply_markup=back_menu()
+                )
+                return
+            payment = Payment.create({
+                "amount":       {"value": f"{amount}.00", "currency": "RUB"},
+                "confirmation": {
+                    "type":       "redirect",
+                    "return_url": "https://t.me/Moya_Vera_bot"
+                },
+                "capture":     True,
+                "description": "Пожертвование на развитие «С верой» во славу Божию",
+                "metadata":    {"user_id": str(user_id), "plan": "donation"},
+            }, str(uuid.uuid4()))
+            set_step(user_id, "idle")
+            await message.answer(
+                f"🕯️ *Пожертвование {amount} рублей*\n\n"
+                f"Нажмите кнопку для перехода к оплате 👇",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(
+                        text="💳 Перейти к оплате",
+                        url=payment.confirmation.confirmation_url
+                    )],
+                    [InlineKeyboardButton(text="◀️ Главное меню", callback_data="main_menu")],
+                ])
+            )
+        except ValueError:
+            await message.answer(
+                "⚠️ Введите сумму цифрой, например: *300*",
+                parse_mode="Markdown",
+                reply_markup=back_menu()
+            )
+        except Exception as e:
+            logging.error(f"Ошибка платежа пожертвования: {e}")
+            await message.answer(
+                "⚠️ Ошибка при создании платежа.\n"
+                "Попробуйте позже или свяжитесь: @Boss023rus",
+                reply_markup=back_menu()
+            )
+        return
+
     # AI вопрос
     if step.startswith("question_"):
         depth   = step.replace("question_", "")
@@ -2751,6 +2842,7 @@ async def main():
     asyncio.create_task(channel_post_loop())
     asyncio.create_task(angel_reminder_loop())
     asyncio.create_task(check_payments_loop())
+    asyncio.create_task(donation_monthly_loop())
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
