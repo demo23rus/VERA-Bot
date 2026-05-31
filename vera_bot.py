@@ -2,6 +2,7 @@ import asyncio
 import sqlite3
 import logging
 import aiohttp
+import os
 from datetime import datetime, timedelta, date
 from openai import AsyncOpenAI
 import anthropic
@@ -14,10 +15,27 @@ import gspread
 from google.oauth2.service_account import Credentials
 import uuid
 
+# ========== ЗАГРУЗКА КЛЮЧЕЙ ИЗ ФАЙЛА ==========
+def load_env(path="/root/.env_vera"):
+    env = {}
+    try:
+        with open(path) as f:
+            for line in f:
+                line = line.strip()
+                if line and "=" in line and not line.startswith("#"):
+                    k, v = line.split("=", 1)
+                    env[k.strip()] = v.strip()
+    except Exception as e:
+        logging.warning(f"Не удалось загрузить {path}: {e}")
+    return env
+
+_env = load_env()
+
 # ========== КОНФИГ ==========
 BOT_TOKEN         = "8830150213:AAFcyR-_mnSpdWnlCngaArSKXA_bp-YLTnY"
 CHANNEL_ID        = "@SvyatoyPut"
-OPENAI_KEY        = "sk-mfvVI3QN2uQvXPlhMkAeUUzmbjK5aQzj"
+OPENAI_KEY        = _env.get("OPENAI_KEY", "")
+ANTHROPIC_KEY     = _env.get("ANTHROPIC_KEY", "")
 OWNER_ID          = 549639607
 CREDENTIALS_FILE  = "/root/google_credentials.json"
 SPREADSHEET_ID    = "1PE7CaFuWOe_eygQqIoMAmUdJBtATbIaNfZR4cvarPCA"
@@ -35,15 +53,9 @@ Configuration.secret_key  = YOOKASSA_SECRET
 # ========== ЛОГИ ==========
 logging.basicConfig(level=logging.INFO)
 
-# ========== КЛИЕНТЫ AI ==========
-openai_client = AsyncOpenAI(
-    api_key=OPENAI_KEY,
-    base_url="https://api.proxyapi.ru/openai/v1"
-)
-claude_client = anthropic.Anthropic(
-    api_key=OPENAI_KEY,
-    base_url="https://api.proxyapi.ru/anthropic"
-)
+# ========== КЛИЕНТЫ AI (прямые, без proxyapi) ==========
+openai_client = AsyncOpenAI(api_key=OPENAI_KEY)
+claude_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
 # ========== БОТ ==========
 bot = Bot(token=BOT_TOKEN)
@@ -1197,9 +1209,10 @@ def profile_menu(user):
             text=f"💎 Тариф: {plan_text}",
             callback_data="subscription"
         )],
-        [InlineKeyboardButton(text="⭐ Избранные молитвы",    callback_data="favorites")],
-        [InlineKeyboardButton(text="🕯️ Пожертвование",        callback_data="donation")],
-        [InlineKeyboardButton(text="◀️ Главное меню",         callback_data="main_menu")],
+        [InlineKeyboardButton(text="⭐ Избранные молитвы",          callback_data="favorites")],
+        [InlineKeyboardButton(text="🙏 Молитва небесному покровителю", callback_data="profile_patron_prayer")],
+        [InlineKeyboardButton(text="🕯️ Пожертвование",               callback_data="donation")],
+        [InlineKeyboardButton(text="◀️ Главное меню",                callback_data="main_menu")],
     ])
 
 def onboarding_menu():
@@ -1630,6 +1643,33 @@ async def cb_sacraments(callback: CallbackQuery):
     )
     await callback.answer()
 
+SACRAMENT_PRAYERS = {
+    "ispoved": [
+        ("📖 Канон покаянный", "prayer_pokayanny_kanon"),
+        ("🌅 Утренняя молитва", "prayer_morning_ru"),
+    ],
+    "prichaschenie": [
+        ("📖 Канон покаянный", "prayer_pokayanny_kanon"),
+        ("✝️ Правило ко Причастию", "prayer_prichaschenie"),
+        ("🌅 Утренняя молитва", "prayer_morning_ru"),
+    ],
+    "kreshchenie": [
+        ("🙏 Отче наш", "prayer_before_meal"),
+        ("🌅 Утренняя молитва", "prayer_morning_ru"),
+    ],
+    "venchanie": [
+        ("🌅 Утренняя молитва", "prayer_morning_ru"),
+        ("🌙 Вечерняя молитва", "prayer_evening_ru"),
+    ],
+    "otpevanie": [
+        ("🕯️ Молитва об упокоении", "prayer_upokoenie"),
+    ],
+    "sobor": [
+        ("🌅 Утренняя молитва", "prayer_morning_ru"),
+        ("✝️ Правило ко Причастию", "prayer_prichaschenie"),
+    ],
+}
+
 @dp.callback_query(F.data.startswith("sacr_"))
 async def cb_sacrament(callback: CallbackQuery):
     key  = callback.data.replace("sacr_", "")
@@ -1637,10 +1677,25 @@ async def cb_sacrament(callback: CallbackQuery):
     if not sacr:
         await callback.answer("Раздел не найден")
         return
+
+    # Строим клавиатуру с кнопками молитв
+    kb_rows = []
+    prayers = SACRAMENT_PRAYERS.get(key, [])
+    if prayers:
+        for i in range(0, len(prayers), 2):
+            row = []
+            row.append(InlineKeyboardButton(text=prayers[i][0], callback_data=prayers[i][1]))
+            if i + 1 < len(prayers):
+                row.append(InlineKeyboardButton(text=prayers[i+1][0], callback_data=prayers[i+1][1]))
+            kb_rows.append(row)
+
+    kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="sacraments")])
+    kb_rows.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
+
     await callback.message.answer(
         f"*{sacr['title']}*\n\n{sacr['text']}",
         parse_mode="Markdown",
-        reply_markup=back_section("sacraments")
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows)
     )
     await callback.answer()
 
@@ -1817,6 +1872,39 @@ async def cb_edit_birth(callback: CallbackQuery):
         parse_mode="Markdown",
         reply_markup=back_section("profile")
     )
+    await callback.answer()
+
+@dp.callback_query(F.data == "profile_patron_prayer")
+async def cb_patron_prayer(callback: CallbackQuery):
+    user = get_user(callback.from_user.id)
+    name = (user.get("church_name") or "").lower().strip()
+    patron_prayers = {
+        "николай": "prayer_nikolay",
+        "матрона": "prayer_matrona",
+        "матронa": "prayer_matrona",
+    }
+    prayer_key = patron_prayers.get(name)
+    if prayer_key and prayer_key in PRAYERS:
+        prayer = PRAYERS[prayer_key]
+        await callback.message.answer(
+            f"🙏 *Молитва вашему небесному покровителю*\n\n"
+            f"*{prayer['title']}*\n\n{prayer['text']}",
+            parse_mode="Markdown",
+            reply_markup=back_section("profile")
+        )
+    else:
+        await callback.message.answer(
+            f"🙏 *Молитва небесному покровителю*\n\n"
+            f"Обратитесь к своему святому своими словами —\n"
+            f"Господь слышит молитву из сердца.\n\n"
+            f"Вы можете найти молитву своему святому\n"
+            f"в разделе 🙏 *Молитвы*",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🙏 Перейти к молитвам", callback_data="prayers")],
+                [InlineKeyboardButton(text="◀️ Профиль", callback_data="profile")],
+            ])
+        )
     await callback.answer()
 
 @dp.callback_query(F.data == "profile_angel_info")
