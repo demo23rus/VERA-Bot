@@ -989,13 +989,25 @@ async def webhook(request: Request):
 
         elif update_type == "message_callback":
             cb = data.get("callback", {})
-            chat_id = cb.get("chat_id") or data.get("chat_id")
+            # В MAX chat_id находится в message.recipient.chat_id
+            message = data.get("message", {})
+            recipient = message.get("recipient", {})
+            chat_id = (
+                cb.get("chat_id") or
+                recipient.get("chat_id") or
+                message.get("sender", {}).get("chat_id") or
+                data.get("chat_id")
+            )
             user = cb.get("user", {})
             user_id = user.get("user_id", 0)
             first_name = user.get("name", "")
             payload = cb.get("payload", "")
-            if payload:
+            logging.info(f"CALLBACK: chat_id={chat_id} user_id={user_id} payload={payload}")
+            logging.info(f"CALLBACK DATA: {data}")
+            if payload and chat_id:
                 await handle_callback(chat_id, user_id, payload, first_name)
+            elif payload and not chat_id:
+                logging.error(f"Нет chat_id в callback: {data}")
 
         return JSONResponse({"ok": True})
     except Exception as e:
