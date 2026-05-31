@@ -3083,16 +3083,6 @@ async def handle_photo(message: Message):
         )
         return
 
-    plan, _ = get_subscription(user_id)
-    lim     = get_limits(user_id)
-    if not plan and lim["photo_requests"] >= FREE_PHOTO:
-        await message.answer(
-            f"🚫 Лимит бесплатных фото-анализов исчерпан ({FREE_PHOTO} в день).\n\n"
-            f"Оформите Премиум для безлимитного доступа 👇",
-            reply_markup=subscription_menu()
-        )
-        return
-
     photo      = message.photo[-1]
     file       = await bot.get_file(photo.file_id)
     local_path = f"/tmp/vera_photo_{user_id}.jpg"
@@ -3107,9 +3097,6 @@ async def handle_photo(message: Message):
     except Exception as e:
         logging.error(f"Ошибка скачивания фото: {e}")
         result = "Не удалось загрузить фото. Попробуйте ещё раз."
-
-    if not plan:
-        increment_limit(user_id, "photo_requests")
 
     await message.answer(result, reply_markup=back_menu())
 
@@ -3372,20 +3359,8 @@ async def handle_text(message: Message):
     # AI вопрос
     if step.startswith("question_"):
         depth   = step.replace("question_", "")
-        plan, _ = get_subscription(user_id)
-        lim     = get_limits(user_id)
-        if not plan and lim["ai_requests"] >= FREE_AI_REQUESTS:
-            await message.answer(
-                f"🚫 Лимит AI-вопросов на сегодня исчерпан ({FREE_AI_REQUESTS} в день).\n\n"
-                f"Завтра лимит обновится.\n"
-                f"Или оформите Премиум для безлимитного доступа 👇",
-                reply_markup=subscription_menu()
-            )
-            return
         await message.answer("🙏 Молюсь... отвечаю...")
         answer = await ask_claude(text, depth)
-        if not plan:
-            increment_limit(user_id, "ai_requests")
         asyncio.create_task(asyncio.to_thread(sheets_update_activity, user_id))
 
         depth_labels = {"short": "💬 Кратко", "medium": "📖 Развёрнуто", "deep": "🙏 Глубоко"}
