@@ -913,6 +913,21 @@ async def handle_text(chat_id, user_id, text, first_name=""):
                 },
                 "capture": True,
                 "description": "Пожертвование на развитие «С верой» во славу Божию",
+                "receipt": {
+                    "customer": {
+                        "email": "6038484@mail.ru"
+                    },
+                    "items": [
+                        {
+                            "description": "Пожертвование на развитие «С верой»",
+                            "quantity": "1.00",
+                            "amount": {"value": f"{amount}.00", "currency": "RUB"},
+                            "vat_code": 1,
+                            "payment_mode": "full_payment",
+                            "payment_subject": "another"
+                        }
+                    ]
+                }
             }, str(uuid.uuid4()))
             set_step(user_id, "idle")
             pay_url = payment.confirmation.confirmation_url
