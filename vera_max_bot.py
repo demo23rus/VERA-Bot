@@ -907,20 +907,31 @@ async def handle_text(chat_id, user_id, text, first_name=""):
             Configuration.secret_key = "live_-RKE9nsi8wZiM-5f00z78E84OYSi3M0Dj9w_-pE0Mvw"
             payment = YPayment.create({
                 "amount": {"value": f"{amount}.00", "currency": "RUB"},
-                "confirmation": {"type": "redirect", "return_url": "https://sveroy.ru"},
+                "confirmation": {
+                    "type": "redirect",
+                    "return_url": "https://sveroy.ru/payment/success"
+                },
                 "capture": True,
                 "description": "Пожертвование на развитие «С верой» во славу Божию",
             }, str(uuid.uuid4()))
             set_step(user_id, "idle")
+            pay_url = payment.confirmation.confirmation_url
             await send_message(chat_id, f"🕯️ Пожертвование {amount} рублей\n\nНажмите для оплаты 👇", [
-                [link_btn("💳 Перейти к оплате", payment.confirmation.confirmation_url)],
+                [link_btn("💳 Перейти к оплате", pay_url)],
                 back_main()[0],
             ])
         except ValueError:
             await send_message(chat_id, "⚠️ Введите сумму цифрой, например: 300")
         except Exception as e:
             logging.error(f"Ошибка платежа: {e}")
-            await send_message(chat_id, "⚠️ Ошибка платежа. Попробуйте позже.", back_main())
+            err_text = str(e)
+            if "return_url" in err_text.lower():
+                user_msg = "⚠️ Ошибка настройки платежа (return_url). Обратитесь к администратору."
+            elif "account" in err_text.lower() or "secret" in err_text.lower():
+                user_msg = "⚠️ Ошибка авторизации ЮКасса. Обратитесь к администратору."
+            else:
+                user_msg = f"⚠️ Ошибка платежа. Попробуйте позже."
+            await send_message(chat_id, user_msg, back_main())
         return
 
     if step and step.startswith("question_"):
@@ -1013,6 +1024,33 @@ async def webhook(request: Request):
     except Exception as e:
         logging.error(f"Webhook error: {e}")
         return JSONResponse({"ok": False})
+
+@app.get("/payment/success")
+async def payment_success():
+    html = """<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Пожертвование принято — С верой</title>
+<style>
+  body { font-family: Arial, sans-serif; text-align: center; padding: 60px 20px; background: #f5f0e8; color: #3a2a1a; }
+  .icon { font-size: 64px; margin-bottom: 20px; }
+  h1 { font-size: 28px; margin-bottom: 12px; }
+  p { font-size: 16px; color: #6b5a4e; line-height: 1.6; }
+  .cross { color: #8b1a1a; font-size: 36px; margin-top: 30px; }
+</style>
+</head>
+<body>
+  <div class="icon">🕯️</div>
+  <h1>Пожертвование принято</h1>
+  <p>Благодарим вас за вашу щедрость.<br>Да благословит вас Господь!</p>
+  <p>Вы можете вернуться в бот <strong>@Moya_Vera_bot</strong></p>
+  <div class="cross">☦️</div>
+</body>
+</html>"""
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(content=html)
 
 @app.get("/health")
 async def health():
