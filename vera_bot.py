@@ -1732,8 +1732,6 @@ def profile_menu(user):
     birth  = user.get("birth_date")  or "не указана"
     angel  = user.get("angel_day")   or "не найден"
     remind = user.get("remind_days") or 3
-    plan, _ = get_subscription(user["user_id"])
-    plan_text = "🌟 Премиум" if plan else "Бесплатный"
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(
             text=f"✏️ Имя: {church}",
@@ -1751,14 +1749,10 @@ def profile_menu(user):
             text=f"🔔 Напомнить за {remind} дн.",
             callback_data="profile_remind"
         )],
-        [InlineKeyboardButton(
-            text=f"💎 Тариф: {plan_text}",
-            callback_data="subscription"
-        )],
-        [InlineKeyboardButton(text="⭐ Избранные молитвы",          callback_data="favorites")],
+        [InlineKeyboardButton(text="⭐ Избранные молитвы",             callback_data="favorites")],
         [InlineKeyboardButton(text="🙏 Молитва небесному покровителю", callback_data="profile_patron_prayer")],
-        [InlineKeyboardButton(text="🕯️ Пожертвование",               callback_data="donate")],
-        [InlineKeyboardButton(text="◀️ Главное меню",                callback_data="main_menu")],
+        [InlineKeyboardButton(text="🕯️ Пожертвование",                callback_data="donate")],
+        [InlineKeyboardButton(text="◀️ Главное меню",                  callback_data="main_menu")],
     ])
 
 def onboarding_menu():
@@ -2042,12 +2036,19 @@ async def cmd_start(message: Message):
     if not user.get("onboarded"):
         await message.answer(
             f"☦️ *Добро пожаловать в «С верой»!*\n\n"
-            f"Я помогу вам с молитвами, православным календарём,\n"
-            f"житиями святых, таинствами и вопросами о вере.\n\n"
-            f"Чтобы напоминать вам о *дне ангела*,\n"
-            f"мне понадобится ваше имя при крещении\n"
-            f"и дата рождения.\n\n"
-            f"Это займёт 30 секунд 🕊️",
+            f"Я ваш православный помощник — здесь всё\n"
+            f"что нужно для духовной жизни:\n\n"
+            f"🙏 Молитвы на все случаи жизни\n"
+            f"📅 Православный календарь и посты\n"
+            f"⛪ Таинства — как подготовиться\n"
+            f"👼 Жития святых и мощи\n"
+            f"🏛️ Святые места России и мира\n"
+            f"📸 Узнать храм или икону по фото\n"
+            f"❓ Задать вопрос о вере\n\n"
+            f"─────────────────\n"
+            f"Чтобы напоминать о *дне ангела* —\n"
+            f"укажите имя при крещении и дату рождения.\n"
+            f"Займёт 30 секунд 🕊️",
             parse_mode="Markdown",
             reply_markup=onboarding_menu()
         )
@@ -2055,6 +2056,7 @@ async def cmd_start(message: Message):
         name = user.get("church_name") or first_name
         await message.answer(
             f"☦️ *С возвращением, {name}!*\n\n"
+            f"Рад видеть вас снова 🕊️\n\n"
             f"Чем могу помочь?",
             parse_mode="Markdown",
             reply_markup=main_menu()
