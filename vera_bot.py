@@ -15,7 +15,7 @@ import gspread
 from google.oauth2.service_account import Credentials
 import uuid
 
-# ========== ЗАГРУЗКА КЛЮЧЕЙ ИЗ ФАЙЛА ==========
+# ========== ЗАГРУЗКА КЛЮЧЕЙ ==========
 def load_env(path="/root/.env_vera"):
     env = {}
     try:
@@ -34,15 +34,19 @@ _env = load_env()
 # ========== КОНФИГ ==========
 BOT_TOKEN         = "8830150213:AAFcyR-_mnSpdWnlCngaArSKXA_bp-YLTnY"
 CHANNEL_ID        = "@SvyatoyPut"
-OPENAI_KEY        = _env.get("OPENAI_KEY", "")
-ANTHROPIC_KEY     = _env.get("ANTHROPIC_KEY", "")
+OPENAI_KEY        = _env.get("OPENAI_KEY") or os.environ.get("OPENAI_KEY", "")
+ANTHROPIC_KEY     = _env.get("ANTHROPIC_KEY") or os.environ.get("ANTHROPIC_KEY", "")
 OWNER_ID          = 549639607
 CREDENTIALS_FILE  = "/root/google_credentials.json"
 SPREADSHEET_ID    = "1PE7CaFuWOe_eygQqIoMAmUdJBtATbIaNfZR4cvarPCA"
 
+logging.basicConfig(level=logging.INFO)
+logging.info(f"OPENAI_KEY loaded: {OPENAI_KEY[:15] if OPENAI_KEY else 'EMPTY'}...")
+logging.info(f"ANTHROPIC_KEY loaded: {ANTHROPIC_KEY[:15] if ANTHROPIC_KEY else 'EMPTY'}...")
+
 # Лимиты
-FREE_AI_REQUESTS  = 10   # бесплатных AI-вопросов в день
-FREE_PHOTO        = 3    # бесплатных фото-анализов
+FREE_AI_REQUESTS  = 10
+FREE_PHOTO        = 3
 
 # ЮКасса
 YOOKASSA_SHOP_ID  = "1363324"
@@ -50,10 +54,7 @@ YOOKASSA_SECRET   = "live_-RKE9nsi8wZiM-5f00z78E84OYSi3M0Dj9w_-pE0Mvw"
 Configuration.account_id = YOOKASSA_SHOP_ID
 Configuration.secret_key  = YOOKASSA_SECRET
 
-# ========== ЛОГИ ==========
-logging.basicConfig(level=logging.INFO)
-
-# ========== КЛИЕНТЫ AI (прямые, без proxyapi) ==========
+# ========== КЛИЕНТЫ AI ==========
 openai_client = AsyncOpenAI(api_key=OPENAI_KEY)
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
