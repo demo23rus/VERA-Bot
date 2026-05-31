@@ -1894,27 +1894,31 @@ async def get_daily_quote() -> str:
         ("Любовь долготерпит, милосердствует, любовь не завидует.", "1 Кор. 13:4"),
         ("Всё могу в укрепляющем меня Иисусе Христе.", "Флп. 4:13"),
         ("Господь — Пастырь мой; я ни в чём не буду нуждаться.", "Пс. 22:1"),
+        ("Где нет смирения — там нет и добродетели.", "Прп. Амвросий Оптинский"),
+        ("Радость — признак духовного здоровья.", "Прп. Паисий Святогорец"),
+        ("Терпение — корень всех добродетелей.", "Прп. Иоанн Лествичник"),
     ]
     import random
     text_q, author = random.choice(quotes)
+    today_str = datetime.now().strftime("%d %B")
     return (
-        f"✨ *Слово на день*\n\n"
+        f"✨ *СЛОВО НА ДЕНЬ • {today_str}*\n\n"
         f"«{text_q}»\n\n"
-        f"— {author}\n\n"
-        f"📖 Молитвы и духовные тексты — @Moya\\_Vera\\_bot"
+        f"— *{author}*\n\n"
+        f"─────────────────\n"
+        f"☦️ Молитвы и тексты → @Moya\\_Vera\\_bot"
     )
 
 async def get_daily_gospel() -> str:
-    """Евангелие дня через Claude"""
     today = datetime.now().strftime("%d %B")
     try:
         message = claude_client.messages.create(
             model="claude-sonnet-4-20250514",
             max_tokens=500,
             system=(
-                "Ты православный помощник. Дай краткое евангельское чтение дня "
+                "Ты православный помощник. Дай евангельское чтение дня "
                 "с коротким толкованием (3-4 предложения). "
-                "Формат: сначала отрывок из Евангелия (2-3 стиха), "
+                "Формат: сначала отрывок из Евангелия (2-3 стиха с указанием источника), "
                 "потом краткое толкование простым языком. "
                 "Отвечай по-русски. Без лишних вступлений."
             ),
@@ -1922,18 +1926,29 @@ async def get_daily_gospel() -> str:
         )
         gospel_text = message.content[0].text
         return (
-            f"📖 *Евангелие дня — {today}*\n\n"
+            f"📖 *ЕВАНГЕЛИЕ ДНЯ • {today}*\n\n"
             f"{gospel_text}\n\n"
-            f"☦️ Читать Библию — @Moya\\_Vera\\_bot"
+            f"─────────────────\n"
+            f"☦️ Читать Библию → @Moya\\_Vera\\_bot"
         )
     except Exception as e:
         logging.error(f"Ошибка Евангелия дня: {e}")
+        # Запасной вариант — цитата из Евангелия
+        quotes = [
+            ("Просите — и дано будет вам; ищите — и найдёте; стучите — и отворят вам.", "Мф. 7:7"),
+            ("Я есмь путь и истина и жизнь.", "Ин. 14:6"),
+            ("Бог есть любовь.", "1 Ин. 4:8"),
+            ("Всё могу в укрепляющем меня Иисусе Христе.", "Флп. 4:13"),
+            ("Господь — Пастырь мой; я ни в чём не буду нуждаться.", "Пс. 22:1"),
+        ]
+        import random
+        text_q, ref = random.choice(quotes)
         return (
-            f"📖 *Евангелие дня*\n\n"
-            f"«Просите — и дано будет вам; ищите — и найдёте; "
-            f"стучите — и отворят вам.»\n\n"
-            f"— Мф. 7:7\n\n"
-            f"☦️ Читать Библию — @Moya\\_Vera\\_bot"
+            f"📖 *ЕВАНГЕЛИЕ ДНЯ • {today}*\n\n"
+            f"«{text_q}»\n\n"
+            f"— {ref}\n\n"
+            f"─────────────────\n"
+            f"☦️ Читать Библию → @Moya\\_Vera\\_bot"
         )
 
 async def channel_post_loop():
@@ -1942,6 +1957,7 @@ async def channel_post_loop():
     while True:
         now = datetime.now()
         hour, minute = now.hour, now.minute
+        today_str = now.strftime("%d %B")
 
         try:
             # 07:00 — Утренняя молитва
@@ -1949,10 +1965,11 @@ async def channel_post_loop():
                 prayer = PRAYERS["morning_ru"]
                 await bot.send_message(
                     CHANNEL_ID,
-                    f"🌅 *Доброе утро!*\n\n"
-                    f"*{prayer['title']}*\n\n"
+                    f"🌅 *Доброе утро, {today_str}!*\n\n"
+                    f"☦️ *Утренняя молитва*\n\n"
                     f"{prayer['text']}\n\n"
-                    f"🙏 Все молитвы — @Moya\\_Vera\\_bot",
+                    f"─────────────────\n"
+                    f"🙏 Все молитвы → @Moya\\_Vera\\_bot",
                     parse_mode="Markdown"
                 )
 
@@ -1961,16 +1978,16 @@ async def channel_post_loop():
                 text = await get_daily_saint()
                 await bot.send_message(CHANNEL_ID, text, parse_mode="Markdown")
 
-            # 09:00 — Именинники сегодня
+            # 09:00 — Именинники (только если есть)
             elif hour == 9 and minute == 0:
-                saints  = get_todays_saints()
-                today   = datetime.now().strftime("%d %B")
+                saints = get_todays_saints()
                 if saints:
-                    text = f"👼 *Именинники {today}:*\n\n"
+                    text = f"👼 *Именинники {today_str}*\n\n"
                     for name, desc in saints:
                         text += f"✨ *{name}* — {desc}\n"
-                    text += f"\n🙏 Поздравьте своих близких!\n\n"
-                    text += f"☦️ День ангела — @Moya\\_Vera\\_bot"
+                    text += f"\n🎉 Поздравьте своих близких!\n\n"
+                    text += f"─────────────────\n"
+                    text += f"☦️ День ангела → @Moya\\_Vera\\_bot"
                     await bot.send_message(CHANNEL_ID, text, parse_mode="Markdown")
 
             # 10:00 — Евангелие дня
@@ -1988,17 +2005,17 @@ async def channel_post_loop():
                 prayer = PRAYERS["evening_ru"]
                 await bot.send_message(
                     CHANNEL_ID,
-                    f"🌙 *Добрый вечер!*\n\n"
-                    f"*{prayer['title']}*\n\n"
+                    f"🌙 *Добрый вечер, {today_str}!*\n\n"
+                    f"☦️ *Вечерняя молитва*\n\n"
                     f"{prayer['text']}\n\n"
-                    f"🙏 Молитвослов — @Moya\\_Vera\\_bot",
+                    f"─────────────────\n"
+                    f"🙏 Молитвослов → @Moya\\_Vera\\_bot",
                     parse_mode="Markdown"
                 )
 
         except Exception as e:
             logging.error(f"Ошибка автопостинга: {e}")
 
-        # Ждём до следующей минуты
         await asyncio.sleep(60 - datetime.now().second)
 
 # ========== НАПОМИНАНИЯ О ДНЕ АНГЕЛА ==========
@@ -2632,9 +2649,8 @@ async def cb_library_section(callback: CallbackQuery):
         ])
         if key == "literatura":
             kb = InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📥 Скачать книги бесплатно", callback_data="lib_pdf")],
-                [InlineKeyboardButton(text="◀️ Библиотека",              callback_data="library")],
-                [InlineKeyboardButton(text="🏠 Главное меню",            callback_data="main_menu")],
+                [InlineKeyboardButton(text="◀️ Библиотека",  callback_data="library")],
+                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
             ])
         await callback.message.answer(
             content["text"],
@@ -2744,13 +2760,26 @@ async def cb_edit_birth(callback: CallbackQuery):
 @dp.callback_query(F.data == "profile_patron_prayer")
 async def cb_patron_prayer(callback: CallbackQuery):
     user = get_user(callback.from_user.id)
-    name = (user.get("church_name") or "").lower().strip()
+    name = (user.get("church_name") or "").strip()
+    angel = user.get("angel_day") or ""
+
+    if not name:
+        await callback.message.answer(
+            "👤 Укажите имя в профиле — тогда найдём молитву вашему покровителю 🙏",
+            reply_markup=back_section("profile")
+        )
+        await callback.answer()
+        return
+
+    name_lower = name.lower()
+    # Сначала ищем в готовых молитвах
     patron_prayers = {
         "николай": "prayer_nikolay",
+        "николай чудотворец": "prayer_nikolay",
         "матрона": "prayer_matrona",
-        "матронa": "prayer_matrona",
+        "матрона московская": "prayer_matrona",
     }
-    prayer_key = patron_prayers.get(name)
+    prayer_key = patron_prayers.get(name_lower)
     if prayer_key and prayer_key in PRAYERS:
         prayer = PRAYERS[prayer_key]
         await callback.message.answer(
@@ -2759,18 +2788,65 @@ async def cb_patron_prayer(callback: CallbackQuery):
             parse_mode="Markdown",
             reply_markup=back_section("profile")
         )
-    else:
+        await callback.answer()
+        return
+
+    # Проверяем кеш в БД
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS patron_prayers_cache (name TEXT PRIMARY KEY, prayer TEXT)")
+    c.execute("SELECT prayer FROM patron_prayers_cache WHERE name=?", (name_lower,))
+    row = c.fetchone()
+    conn.close()
+
+    if row:
         await callback.message.answer(
-            f"🙏 *Молитва небесному покровителю*\n\n"
-            f"Обратитесь к своему святому своими словами —\n"
-            f"Господь слышит молитву из сердца.\n\n"
-            f"Вы можете найти молитву своему святому\n"
-            f"в разделе 🙏 *Молитвы*",
+            f"🙏 *Молитва небесному покровителю — {name}*\n\n{row[0]}",
             parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🙏 Перейти к молитвам", callback_data="prayers")],
-                [InlineKeyboardButton(text="◀️ Профиль", callback_data="profile")],
-            ])
+            reply_markup=back_section("profile")
+        )
+        await callback.answer()
+        return
+
+    # Генерируем через Claude
+    await callback.message.answer("🙏 Нахожу молитву вашему покровителю...")
+    saint_info = f"{name}"
+    if angel:
+        saint_info += f" (день памяти: {angel})"
+
+    try:
+        message = claude_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=600,
+            system=(
+                "Ты православный помощник. Напиши краткую молитву православному святому. "
+                "Молитва должна быть в православной традиции, тёплой и доступной. "
+                "Длина: 8-12 строк. Начни с обращения к святому. Закончи словом Аминь. "
+                "Только текст молитвы, без пояснений."
+            ),
+            messages=[{"role": "user", "content": f"Напиши молитву святому: {saint_info}"}]
+        )
+        prayer_text = message.content[0].text
+
+        # Сохраняем в кеш
+        conn2 = sqlite3.connect(DB_PATH)
+        c2 = conn2.cursor()
+        c2.execute("INSERT OR REPLACE INTO patron_prayers_cache (name, prayer) VALUES (?,?)",
+                   (name_lower, prayer_text))
+        conn2.commit()
+        conn2.close()
+
+        await callback.message.answer(
+            f"🙏 *Молитва небесному покровителю — {name}*\n\n{prayer_text}",
+            parse_mode="Markdown",
+            reply_markup=back_section("profile")
+        )
+    except Exception as e:
+        logging.error(f"Ошибка генерации молитвы: {e}")
+        await callback.message.answer(
+            "🙏 Обратитесь к своему святому своими словами —\n"
+            "Господь слышит молитву из сердца.",
+            reply_markup=back_section("profile")
         )
     await callback.answer()
 
