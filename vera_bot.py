@@ -1757,7 +1757,7 @@ def profile_menu(user):
         )],
         [InlineKeyboardButton(text="⭐ Избранные молитвы",          callback_data="favorites")],
         [InlineKeyboardButton(text="🙏 Молитва небесному покровителю", callback_data="profile_patron_prayer")],
-        [InlineKeyboardButton(text="🕯️ Пожертвование",               callback_data="donation")],
+        [InlineKeyboardButton(text="🕯️ Пожертвование",               callback_data="donate")],
         [InlineKeyboardButton(text="◀️ Главное меню",                callback_data="main_menu")],
     ])
 
@@ -1894,6 +1894,38 @@ async def get_daily_quote() -> str:
         f"📖 Молитвы и духовные тексты — @Moya\\_Vera\\_bot"
     )
 
+async def get_daily_gospel() -> str:
+    """Евангелие дня через Claude"""
+    today = datetime.now().strftime("%d %B")
+    try:
+        message = claude_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=500,
+            system=(
+                "Ты православный помощник. Дай краткое евангельское чтение дня "
+                "с коротким толкованием (3-4 предложения). "
+                "Формат: сначала отрывок из Евангелия (2-3 стиха), "
+                "потом краткое толкование простым языком. "
+                "Отвечай по-русски. Без лишних вступлений."
+            ),
+            messages=[{"role": "user", "content": f"Дай евангельское чтение на {today}"}]
+        )
+        gospel_text = message.content[0].text
+        return (
+            f"📖 *Евангелие дня — {today}*\n\n"
+            f"{gospel_text}\n\n"
+            f"☦️ Читать Библию — @Moya\\_Vera\\_bot"
+        )
+    except Exception as e:
+        logging.error(f"Ошибка Евангелия дня: {e}")
+        return (
+            f"📖 *Евангелие дня*\n\n"
+            f"«Просите — и дано будет вам; ищите — и найдёте; "
+            f"стучите — и отворят вам.»\n\n"
+            f"— Мф. 7:7\n\n"
+            f"☦️ Читать Библию — @Moya\\_Vera\\_bot"
+        )
+
 async def channel_post_loop():
     """Автопостинг в канал по расписанию"""
     await asyncio.sleep(10)
@@ -1910,17 +1942,34 @@ async def channel_post_loop():
                     f"🌅 *Доброе утро!*\n\n"
                     f"*{prayer['title']}*\n\n"
                     f"{prayer['text']}\n\n"
-                    f"🙏 Подробнее — @Moya\\_Vera\\_bot",
+                    f"🙏 Все молитвы — @Moya\\_Vera\\_bot",
                     parse_mode="Markdown"
                 )
 
-            # 08:00 — Святой дня + именинники
+            # 08:00 — Святой дня + краткое житие
             elif hour == 8 and minute == 0:
                 text = await get_daily_saint()
                 await bot.send_message(CHANNEL_ID, text, parse_mode="Markdown")
 
-            # 10:00 — Цитата
+            # 09:00 — Именинники сегодня
+            elif hour == 9 and minute == 0:
+                saints  = get_todays_saints()
+                today   = datetime.now().strftime("%d %B")
+                if saints:
+                    text = f"👼 *Именинники {today}:*\n\n"
+                    for name, desc in saints:
+                        text += f"✨ *{name}* — {desc}\n"
+                    text += f"\n🙏 Поздравьте своих близких!\n\n"
+                    text += f"☦️ День ангела — @Moya\\_Vera\\_bot"
+                    await bot.send_message(CHANNEL_ID, text, parse_mode="Markdown")
+
+            # 10:00 — Евангелие дня
             elif hour == 10 and minute == 0:
+                text = await get_daily_gospel()
+                await bot.send_message(CHANNEL_ID, text, parse_mode="Markdown")
+
+            # 12:00 — Цитата святых отцов
+            elif hour == 12 and minute == 0:
                 text = await get_daily_quote()
                 await bot.send_message(CHANNEL_ID, text, parse_mode="Markdown")
 
@@ -2264,6 +2313,7 @@ async def cb_sacrament(callback: CallbackQuery):
                 row.append(InlineKeyboardButton(text=prayers[i+1][0], callback_data=prayers[i+1][1]))
             kb_rows.append(row)
 
+    kb_rows.append([InlineKeyboardButton(text="⭐ Сохранить в избранное", callback_data=f"save_sacr_{key}")])
     kb_rows.append([InlineKeyboardButton(text="◀️ Назад", callback_data="sacraments")])
     kb_rows.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
 
@@ -2273,6 +2323,16 @@ async def cb_sacrament(callback: CallbackQuery):
         reply_markup=InlineKeyboardMarkup(inline_keyboard=kb_rows)
     )
     await callback.answer()
+
+@dp.callback_query(F.data.startswith("save_sacr_"))
+async def cb_save_sacr(callback: CallbackQuery):
+    key  = callback.data.replace("save_sacr_", "")
+    sacr = SACRAMENTS.get(key)
+    if sacr:
+        save_favorite(callback.from_user.id, sacr["title"], sacr["text"])
+        await callback.answer("⭐ Сохранено в избранное!", show_alert=False)
+    else:
+        await callback.answer("Ошибка сохранения")
 
 # ========== СВЯТЫЕ ==========
 @dp.callback_query(F.data == "saints")
@@ -2326,29 +2386,243 @@ async def cb_place(callback: CallbackQuery):
     await callback.message.answer(
         f"*{place['title']}*\n\n{place['text']}",
         parse_mode="Markdown",
-        reply_markup=back_section("holy_places")
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="⭐ Сохранить в избранное", callback_data=f"save_place_{key}")],
+            [InlineKeyboardButton(text="◀️ Назад",                callback_data="holy_places")],
+            [InlineKeyboardButton(text="🏠 Главное меню",         callback_data="main_menu")],
+        ])
     )
     await callback.answer()
 
+@dp.callback_query(F.data.startswith("save_place_"))
+async def cb_save_place(callback: CallbackQuery):
+    key   = callback.data.replace("save_place_", "")
+    place = HOLY_PLACES.get(key)
+    if place:
+        save_favorite(callback.from_user.id, place["title"], place["text"])
+        await callback.answer("⭐ Сохранено в избранное!", show_alert=False)
+    else:
+        await callback.answer("Ошибка сохранения")
+
 # ========== БИБЛИОТЕКА ==========
+LIBRARY_CONTENT = {
+    "slovar": {
+        "title": "📝 Церковный словарь",
+        "text": (
+            "📝 *Церковный словарь*\n\n"
+            "Часто встречающиеся слова объяснённые простым языком:\n\n"
+            "⛪ *Аналой* — высокий столик с наклонной поверхностью\n"
+            "на котором лежат иконы или Евангелие.\n\n"
+            "📖 *Акафист* — особое хвалебное песнопение\n"
+            "в честь Христа, Богородицы или святого.\n"
+            "Читается стоя (а-кафист = не сидя).\n\n"
+            "🫒 *Елей* — освящённое растительное масло.\n"
+            "Используется при помазании в Таинствах.\n\n"
+            "🧣 *Епитрахиль* — длинная лента священника\n"
+            "надеваемая на шею. Символ благодати священства.\n\n"
+            "📿 *Епитимья* — духовное упражнение\n"
+            "назначаемое священником после исповеди.\n"
+            "Например: поклоны, пост, молитвы.\n\n"
+            "🏛️ *Иконостас* — перегородка из икон\n"
+            "отделяющая алтарь от основной части храма.\n\n"
+            "🕯️ *Канон* — богослужебное произведение\n"
+            "из 9 песней. Читается или поётся на службах.\n\n"
+            "⛪ *Канун* — прямоугольный подсвечник\n"
+            "с распятием. Свечи здесь ставят за упокой.\n\n"
+            "💧 *Крещенская вода* — вода освящённая\n"
+            "в праздник Богоявления. Не портится годами.\n\n"
+            "🎵 *Литургия* — главное богослужение Церкви.\n"
+            "На ней совершается Таинство Причастия.\n\n"
+            "🧴 *Миро* — особое освящённое масло\n"
+            "с ароматическими веществами. Используется\n"
+            "при Таинстве Миропомазания.\n\n"
+            "🧣 *Омофор* — широкая лента епископа.\n"
+            "Символ заблудшей овцы на плечах пастыря.\n\n"
+            "🍞 *Просфора* — небольшой круглый хлеб\n"
+            "из которого на Литургии вынимаются частицы.\n"
+            "Раздаётся верующим после службы.\n\n"
+            "🎵 *Тропарь* — краткое песнопение\n"
+            "раскрывающее суть праздника или святого.\n\n"
+            "🍷 *Теплота* — тёплая смесь воды и вина\n"
+            "которой запивают Причастие.\n\n"
+            "✝️ *Царские врата* — центральные двери\n"
+            "иконостаса. Открываются только в особые моменты."
+        )
+    },
+    "faq": {
+        "title": "❓ Частые вопросы о вере",
+        "text": (
+            "❓ *Частые вопросы о вере*\n\n"
+            "🔸 *Можно ли креститься в любом возрасте?*\n"
+            "Да. Крещение совершается над людьми\n"
+            "любого возраста — от младенцев до стариков.\n\n"
+            "🔸 *Обязательно ли ходить в церковь?*\n"
+            "Православная жизнь невозможна без Церкви.\n"
+            "Таинства — Причастие, Исповедь — совершаются\n"
+            "только в храме. Домашняя молитва важна,\n"
+            "но не заменяет церковную жизнь.\n\n"
+            "🔸 *Что делать если не понимаю службу?*\n"
+            "Это нормально. Купите книгу «Закон Божий»\n"
+            "или скачайте объяснение Литургии.\n"
+            "Со временем понимание придёт само.\n\n"
+            "🔸 *Можно ли причащаться без поста?*\n"
+            "Поговорите со священником — в особых случаях\n"
+            "(болезнь, немощь) он может разрешить\n"
+            "сокращённое правило.\n\n"
+            "🔸 *Что такое грех?*\n"
+            "Грех — это отступление от Бога и Его заповедей.\n"
+            "Не наказание от Бога, а рана которую\n"
+            "человек наносит себе сам.\n\n"
+            "🔸 *Почему православные постятся?*\n"
+            "Пост — это не диета. Это воздержание\n"
+            "тела для усиления духа. Пост без молитвы\n"
+            "— просто голодание.\n\n"
+            "🔸 *Можно ли молиться своими словами?*\n"
+            "Да и это очень хорошо. Господь слышит\n"
+            "молитву сердца. Можно и нужно говорить\n"
+            "с Богом своими словами.\n\n"
+            "🔸 *Что будет после смерти?*\n"
+            "Православная Церковь учит о воскресении\n"
+            "мёртвых и жизни будущего века. Душа\n"
+            "бессмертна и продолжает жить после смерти тела.\n\n"
+            "🔸 *Почему Бог допускает страдания?*\n"
+            "Один из самых глубоких вопросов веры.\n"
+            "Страдание может очищать, смирять и вести\n"
+            "к Богу. Задайте этот вопрос в разделе\n"
+            "❓ Задать вопрос — ответим развёрнуто.\n\n"
+            "🔸 *С чего начать церковную жизнь?*\n"
+            "1. Покрестититься если не крещены\n"
+            "2. Найти свой приход и батюшку\n"
+            "3. Прийти на Исповедь\n"
+            "4. Причаститься\n"
+            "5. Читать утренние и вечерние молитвы"
+        )
+    },
+    "literatura": {
+        "title": "📚 Православная литература",
+        "text": (
+            "📚 *Православная литература*\n\n"
+            "📥 *Скачать бесплатно (PDF):*\n\n"
+            "Нажмите на кнопку ниже чтобы получить книгу.\n\n"
+            "📖 *Рекомендуем прочитать:*\n\n"
+            "⭐ *Несвятые святые* — архим. Тихон Шевкунов\n"
+            "Самая читаемая православная книга нашего времени.\n"
+            "Живые истории из монастырской жизни.\n"
+            "Читается как роман — не оторваться.\n\n"
+            "📖 *Закон Божий* — прот. Серафим Слободской\n"
+            "Лучшая книга для начинающих. Всё о вере\n"
+            "доступным языком. Начните с неё.\n\n"
+            "📖 *Таинство веры* — митр. Иларион Алфеев\n"
+            "Введение в православное богословие.\n"
+            "Просто о сложном — для думающего человека.\n\n"
+            "📖 *Паисий Святогорец — Слова* (5 томов)\n"
+            "Мудрость афонского старца о духовной жизни,\n"
+            "семье, молитве, современном мире.\n\n"
+            "📖 *Душа после смерти* — иером. Серафим Роуз\n"
+            "О том что происходит с душой после смерти.\n"
+            "Православный взгляд, основанный на Предании.\n\n"
+            "📖 *Лествица* — прп. Иоанн Лествичник\n"
+            "Классика православной аскетики. VI век.\n"
+            "О ступенях духовного восхождения.\n\n"
+            "📖 *Добротолюбие* — антология святых отцов\n"
+            "Сборник наставлений подвижников IV-XV вв.\n"
+            "Фундамент православной духовности.\n\n"
+            "📖 *Несвятые святые* и другие современные книги\n"
+            "ищите на: *litres.ru*, *ozon.ru*,\n"
+            "в церковных лавках вашего храма."
+        )
+    },
+}
+
+PDF_BOOKS = {
+    "pdf_bible": {
+        "title": "📖 Библия (Синодальный перевод)",
+        "url": "https://azbyka.ru/biblia/in/pdf/bibliya-sinodalnij-perevod.pdf"
+    },
+    "pdf_nt": {
+        "title": "📖 Новый Завет",
+        "url": "https://azbyka.ru/otechnik/Biblia/novyj-zavet-sinodalnij-perevod/"
+    },
+    "pdf_molitvoslov": {
+        "title": "🙏 Православный молитвослов",
+        "url": "https://azbyka.ru/molitvoslov/"
+    },
+    "pdf_psaltir": {
+        "title": "📜 Псалтирь",
+        "url": "https://azbyka.ru/otechnik/Biblia/psaltir-v-russkom-perevode/"
+    },
+    "pdf_lestvica": {
+        "title": "📖 Лествица — прп. Иоанн Лествичник",
+        "url": "https://azbyka.ru/otechnik/Ioann_Lestvichnik/lestvitsa/"
+    },
+    "pdf_dobrotolyubie": {
+        "title": "📖 Добротолюбие",
+        "url": "https://azbyka.ru/otechnik/prochee/dobrotoljubie_tom1/"
+    },
+}
+
+def library_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📝 Церковный словарь",         callback_data="lib_slovar")],
+        [InlineKeyboardButton(text="❓ Частые вопросы о вере",     callback_data="lib_faq")],
+        [InlineKeyboardButton(text="📚 Православная литература",   callback_data="lib_literatura")],
+        [InlineKeyboardButton(text="📥 Скачать книги бесплатно",   callback_data="lib_pdf")],
+        [InlineKeyboardButton(text="◀️ Главное меню",              callback_data="main_menu")],
+    ])
+
+def pdf_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📖 Библия",              url="https://azbyka.ru/biblia/")],
+        [InlineKeyboardButton(text="📖 Новый Завет",         url="https://azbyka.ru/otechnik/Biblia/novyj-zavet-sinodalnij-perevod/")],
+        [InlineKeyboardButton(text="🙏 Молитвослов",         url="https://azbyka.ru/molitvoslov/")],
+        [InlineKeyboardButton(text="📜 Псалтирь",            url="https://azbyka.ru/otechnik/Biblia/psaltir-v-russkom-perevode/")],
+        [InlineKeyboardButton(text="📖 Лествица",            url="https://azbyka.ru/otechnik/Ioann_Lestvichnik/lestvitsa/")],
+        [InlineKeyboardButton(text="📖 Добротолюбие",        url="https://azbyka.ru/otechnik/prochee/dobrotoljubie_tom1/")],
+        [InlineKeyboardButton(text="◀️ Назад",               callback_data="library")],
+    ])
+
 @dp.callback_query(F.data == "library")
 async def cb_library(callback: CallbackQuery):
-    text = (
-        "📚 *Библиотека*\n\n"
-        "Раздел в разработке — скоро здесь появятся:\n\n"
-        "📖 Библия — поиск по книге и главе\n"
-        "🔍 Толкование Евангелия\n"
-        "⛪ Объяснение богослужения\n"
-        "📝 Церковный словарь\n"
-        "📚 Православная литература\n"
-        "❓ Катехизис и FAQ\n\n"
-        "Следите за обновлениями! 🙏"
-    )
     await callback.message.answer(
-        text,
+        "📚 *Библиотека*\n\n"
+        "Выберите раздел:",
         parse_mode="Markdown",
-        reply_markup=back_menu()
+        reply_markup=library_menu()
     )
+    await callback.answer()
+
+@dp.callback_query(F.data.startswith("lib_"))
+async def cb_library_section(callback: CallbackQuery):
+    key = callback.data.replace("lib_", "")
+    if key == "pdf":
+        await callback.message.answer(
+            "📥 *Скачать книги бесплатно*\n\n"
+            "Все книги размещены на сайте Азбука.ру —\n"
+            "крупнейшей православной библиотеке.\n\n"
+            "Нажмите на название книги чтобы открыть 👇",
+            parse_mode="Markdown",
+            reply_markup=pdf_menu()
+        )
+    else:
+        content = LIBRARY_CONTENT.get(key)
+        if not content:
+            await callback.answer("Раздел не найден")
+            return
+        kb = InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="◀️ Библиотека",   callback_data="library")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+        ])
+        if key == "literatura":
+            kb = InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📥 Скачать книги бесплатно", callback_data="lib_pdf")],
+                [InlineKeyboardButton(text="◀️ Библиотека",              callback_data="library")],
+                [InlineKeyboardButton(text="🏠 Главное меню",            callback_data="main_menu")],
+            ])
+        await callback.message.answer(
+            content["text"],
+            parse_mode="Markdown",
+            reply_markup=kb
+        )
     await callback.answer()
 
 # ========== ФОТО ==========
