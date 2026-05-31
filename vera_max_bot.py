@@ -974,6 +974,51 @@ async def handle_photo(chat_id, user_id, photo_token):
     result = await analyze_photo(photo_bytes, photo_type)
     await send_message(chat_id, result, [[btn("📸 Ещё фото", "photo_menu"), btn("🏠 Меню", "main_menu")]])
 
+# ========== АВТОПОСТИНГ В КАНАЛ ==========
+MAX_CHANNEL_ID = -75405929805299
+
+async def post_to_channel(text):
+    try:
+        result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", {"text": text})
+        logging.info(f"Канал: пост отправлен: {result}")
+    except Exception as e:
+        logging.error(f"Канал: ошибка отправки: {e}")
+
+async def generate_channel_post(prompt):
+    try:
+        msg = claude_client.messages.create(
+            model="claude-sonnet-4-20250514",
+            max_tokens=600,
+            system="Ты православный помощник. Пиши тепло, кратко, душевно. Без лишних слов. Без хэштегов.",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return msg.content[0].text
+    except Exception as e:
+        logging.error(f"Ошибка генерации поста: {e}")
+        return None
+
+async def channel_scheduler():
+    """Автопостинг 6 раз в день по МСК (UTC+3)"""
+    # МСК 07:00, 08:00, 09:00, 10:00, 12:00, 20:00 = UTC 04:00, 05:00, 06:00, 07:00, 09:00, 17:00
+    schedule = [
+        (4,  0, "утренняя молитва",    "Напиши короткий пост для православного канала — утренняя молитва или благословение на день. 3-4 предложения. Начни с эмодзи 🌅"),
+        (5,  0, "цитата святого",      "Напиши короткий пост для православного канала — мудрая цитата православного святого или старца с кратким пояснением. Начни с эмодзи ✝️"),
+        (6,  0, "факт о празднике",    "Напиши короткий пост для православного канала — интересный факт о православном празднике или святом дня. Начни с эмодзи 📅"),
+        (7,  0, "духовное наставление","Напиши короткий пост для православного канала — краткое духовное наставление или поучение святых отцов. Начни с эмодзи 🕯️"),
+        (9,  0, "история святого",     "Напиши короткий пост для православного канала — трогательная или поучительная история из жизни православного святого. Начни с эмодзи 👼"),
+        (17, 0, "вечерняя молитва",    "Напиши короткий пост для православного канала — вечерняя молитва или слова утешения на конец дня. Начни с эмодзи 🌙"),
+    ]
+    while True:
+        now = datetime.utcnow()
+        for hour, minute, name, prompt in schedule:
+            if now.hour == hour and now.minute == minute:
+                logging.info(f"Канал: публикую пост — {name}")
+                text = await generate_channel_post(prompt)
+                if text:
+                    await post_to_channel(text)
+                await asyncio.sleep(61)
+        await asyncio.sleep(30)
+
 # ========== FASTAPI ==========
 app = FastAPI()
 
@@ -981,6 +1026,7 @@ app = FastAPI()
 async def startup():
     init_db()
     await register_webhook()
+    asyncio.create_task(channel_scheduler())
     logging.info("Vera MAX Bot запущен!")
 
 @app.post("/webhook")
