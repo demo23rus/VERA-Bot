@@ -1786,14 +1786,19 @@ async def ask_claude(question: str, depth: str) -> str:
         "deep":   "Отвечай глубоко и мудро — как опытный православный священник. Приведи цитаты из Писания и святых отцов. Заверши молитвенным пожеланием.",
     }
     system = (
-        "Ты православный помощник. Отвечаешь на вопросы о вере, Церкви, духовной жизни "
-        "в духе Православия — с любовью, без осуждения, мягко и точно. "
-        "Основываешься на Священном Писании, Предании Церкви, учении святых отцов. "
+        "Ты православный священник с многолетним опытом пастырского служения. "
+        "Отвечаешь на вопросы о вере тепло, по-отечески, как настоящий батюшка на исповеди или после службы. "
+        "Говоришь просто и сердечно — не сухо и не академично. "
+        "Можешь использовать слова: чадо, душа моя, Господь милостив. "
+        "Опираешься на Священное Писание, Предание, слова святых отцов — объясняешь живым языком. "
+        "Никогда не осуждаешь, всегда утешаешь и ободряешь. "
+        "В конце ответа — краткое молитвенное пожелание или благословение. "
+        "Отвечаешь только по-русски. "
         f"{depth_prompts.get(depth, depth_prompts['medium'])}"
     )
     try:
         message = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5",
             max_tokens=1000,
             system=system,
             messages=[{"role": "user", "content": question}]
@@ -1913,7 +1918,7 @@ async def get_daily_gospel() -> str:
     today = datetime.now().strftime("%d %B")
     try:
         message = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5",
             max_tokens=500,
             system=(
                 "Ты православный помощник. Дай евангельское чтение дня "
@@ -2816,7 +2821,7 @@ async def cb_patron_prayer(callback: CallbackQuery):
 
     try:
         message = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5",
             max_tokens=600,
             system=(
                 "Ты православный помощник. Напиши краткую молитву православному святому. "
@@ -3441,14 +3446,31 @@ async def handle_text(message: Message):
         asyncio.create_task(asyncio.to_thread(sheets_update_activity, user_id))
 
         depth_labels = {"short": "💬 Кратко", "medium": "📖 Развёрнуто", "deep": "🙏 Глубоко"}
-        await message.answer(
-            f"{depth_labels.get(depth, '')} *Ответ:*\n\n{answer}",
-            parse_mode="Markdown",
-            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="❓ Задать ещё вопрос", callback_data="ask_question")],
-                [InlineKeyboardButton(text="🏠 Главное меню",      callback_data="main_menu")],
-            ])
-        )
+
+        if answer == "error":
+            # Уведомляем админа
+            try:
+                await bot.send_message(8935471523,
+                    f"⚠️ Ошибка Claude в @Moya_Vera_bot\nПользователь: {user_id}\nВопрос: {text[:100]}")
+            except Exception:
+                pass
+            await message.answer(
+                "⚠️ Не удалось получить ответ. Попробуйте чуть позже.",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="ask_question")],
+                    [InlineKeyboardButton(text="📢 Сообщить о проблеме", url="https://t.me/Boss023rus")],
+                    [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+                ])
+            )
+        else:
+            await message.answer(
+                f"{depth_labels.get(depth, '')} *Ответ:*\n\n{answer}",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="❓ Задать ещё вопрос", callback_data="ask_question")],
+                    [InlineKeyboardButton(text="🏠 Главное меню",      callback_data="main_menu")],
+                ])
+            )
         set_step(user_id, "idle")
         return
 
