@@ -1161,6 +1161,14 @@ async def webhook(request: Request):
             if text:
                 await handle_text(chat_id, user_id, text, first_name)
 
+        elif update_type == "bot_started":
+            user = data.get("user", {})
+            chat_id = data.get("chat_id") or user.get("user_id")
+            user_id = user.get("user_id", 0)
+            first_name = user.get("name", "друг")
+            logging.info(f"BOT_STARTED: chat_id={chat_id} user_id={user_id}")
+            await handle_start(chat_id, user_id, first_name, "")
+
         elif update_type == "message_callback":
             cb = data.get("callback", {})
             # В MAX chat_id находится в message.recipient.chat_id
