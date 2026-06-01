@@ -3353,6 +3353,17 @@ async def cb_buy_premium(callback: CallbackQuery):
             "capture":     True,
             "description": "Премиум подписка — С верой",
             "metadata":    {"user_id": str(user_id), "plan": "premium"},
+            "receipt": {
+                "customer": {"email": "6038484@mail.ru"},
+                "items": [{
+                    "description": "Премиум подписка С верой",
+                    "quantity": "1.00",
+                    "amount": {"value": "149.00", "currency": "RUB"},
+                    "vat_code": 1,
+                    "payment_mode": "full_payment",
+                    "payment_subject": "service"
+                }]
+            },
         }, str(uuid.uuid4()))
 
         conn = sqlite3.connect(DB_PATH)
@@ -3735,6 +3746,17 @@ async def handle_text(message: Message):
                 "capture":     True,
                 "description": "Пожертвование на развитие «С верой» во славу Божию",
                 "metadata":    {"user_id": str(user_id), "plan": "donation"},
+                "receipt": {
+                    "customer": {"email": "6038484@mail.ru"},
+                    "items": [{
+                        "description": "Пожертвование на развитие «С верой»",
+                        "quantity": "1.00",
+                        "amount": {"value": f"{amount}.00", "currency": "RUB"},
+                        "vat_code": 1,
+                        "payment_mode": "full_payment",
+                        "payment_subject": "another"
+                    }]
+                },
             }, str(uuid.uuid4()))
             set_step(user_id, "idle")
             await message.answer(
