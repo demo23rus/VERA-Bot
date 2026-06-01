@@ -1560,6 +1560,29 @@ HOLY_PLACES = {
 }
 
 # ========== ОТЗЫВЫ ==========
+def add_donation_to_sheet(user_id, username, first_name, amount):
+    """Записывает пожертвование в лист Пожертвования"""
+    try:
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds  = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+        client = gspread.authorize(creds)
+        sp     = client.open_by_key(SPREADSHEET_ID)
+        try:
+            sheet = sp.worksheet("Пожертвования")
+        except Exception:
+            sheet = sp.add_worksheet(title="Пожертвования", rows=2000, cols=6)
+            sheet.insert_row(["ID","Username","Имя","Сумма (руб)","Дата","Источник"], 1)
+        sheet.append_row([
+            str(user_id),
+            f"@{username}" if username else "—",
+            first_name or "—",
+            str(amount),
+            datetime.now().strftime("%d.%m.%Y %H:%M"),
+            "Telegram"
+        ])
+    except Exception as e:
+        logging.error(f"Sheets add_donation: {e}")
+
 def add_review_to_sheet(user_id, username, first_name, text):
     try:
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
