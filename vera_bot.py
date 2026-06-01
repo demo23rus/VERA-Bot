@@ -96,7 +96,19 @@ def init_db():
         remind_days   INTEGER DEFAULT 3,
         step          TEXT    DEFAULT '',
         onboarded     INTEGER DEFAULT 0,
-        registered_at TEXT    DEFAULT ''
+        registered_at TEXT    DEFAULT '',
+        notifications INTEGER DEFAULT 1
+    )""")
+    # Добавляем колонку если её ещё нет (для существующих баз)
+    try:
+        c.execute("ALTER TABLE users ADD COLUMN notifications INTEGER DEFAULT 1")
+        conn.commit()
+    except Exception:
+        pass
+    # Таблица кеша молитвы дня
+    c.execute("""CREATE TABLE IF NOT EXISTS daily_prayer_cache (
+        date TEXT PRIMARY KEY,
+        prayer TEXT
     )""")
     c.execute("""CREATE TABLE IF NOT EXISTS limits (
         user_id       INTEGER PRIMARY KEY,
@@ -140,7 +152,8 @@ def get_user(user_id, username="", first_name=""):
         return {
             "user_id": row[0], "username": row[1], "first_name": row[2],
             "church_name": row[3], "birth_date": row[4], "angel_day": row[5],
-            "remind_days": row[6], "step": row[7], "onboarded": row[8]
+            "remind_days": row[6], "step": row[7], "onboarded": row[8],
+            "notifications": row[10] if len(row) > 10 else 1
         }
     return {}
 
@@ -1667,6 +1680,7 @@ def back_section(section):
 
 def prayers_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✨ Молитва дня", callback_data="prayer_of_day")],
         [
             InlineKeyboardButton(text="🌅 Утренняя (рус)",    callback_data="prayer_morning_ru"),
             InlineKeyboardButton(text="🌅 Утренняя (цс)",     callback_data="prayer_morning_cs"),
@@ -1793,6 +1807,10 @@ def profile_menu(user):
         )],
         [InlineKeyboardButton(text="⭐ Избранные молитвы",             callback_data="favorites")],
         [InlineKeyboardButton(text="🙏 Молитва небесному покровителю", callback_data="profile_patron_prayer")],
+        [InlineKeyboardButton(
+            text="🔔 Утренние уведомления: ВКЛ" if user.get("notifications", 1) else "🔕 Утренние уведомления: ВЫКЛ",
+            callback_data="toggle_notifications"
+        )],
         [InlineKeyboardButton(text="🕯️ Пожертвование",                callback_data="donate")],
         [InlineKeyboardButton(text="◀️ Главное меню",                  callback_data="main_menu")],
     ])
@@ -2071,6 +2089,79 @@ async def channel_post_loop():
         await asyncio.sleep(60 - datetime.now().second)
 
 # ========== НАПОМИНАНИЯ О ДНЕ АНГЕЛА ==========
+async def get_prayer_of_day() -> str:
+    """Генерирует или возвращает из кеша молитву дня"""
+    today = datetime.now().strftime("%Y-%m-%d")
+    # Проверяем кеш
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT prayer FROM daily_prayer_cache WHERE date=?", (today,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return row[0]
+    # Генерируем новую
+    day_str = date_ru("short")
+    feast = get_todays_feast()
+    saints = get_todays_saints()
+    context = ""
+    if feast:
+        context = f"Сегодня праздник: {feast}."
+    elif saints:
+        context = f"Сегодня память: {', '.join([s[0] for s in saints[:2]])}."
+    prompt = (
+        f"Напиши православную молитву дня. {context} "
+        f"Дата: {day_str}. "
+        "Молитва должна быть тёплой, душевной, 8-15 строк. "
+        "Начни с обращения к Господу или Богородице. Заверши Аминь. "
+        "Пиши только по-русски."
+    )
+    try:
+        msg = claude_client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=600,
+            system="Ты православный священник. Пишешь молитвы тепло и душевно.",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        prayer = msg.content[0].text
+        # Сохраняем в кеш
+        conn2 = sqlite3.connect(DB_PATH)
+        conn2.execute("INSERT OR REPLACE INTO daily_prayer_cache (date, prayer) VALUES (?,?)", (today, prayer))
+        conn2.commit()
+        conn2.close()
+        return prayer
+    except Exception as e:
+        logging.error(f"Ошибка молитвы дня: {e}")
+        return PRAYERS["morning_ru"]["text"]
+
+async def morning_broadcast():
+    """Утренняя рассылка всем пользователям у кого включены уведомления"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id, church_name FROM users WHERE notifications=1 OR notifications IS NULL")
+    users = c.fetchall()
+    conn.close()
+    prayer = await get_prayer_of_day()
+    day_str = date_ru("short")
+    feast = get_todays_feast()
+    feast_line = ("\U0001f389 " + feast + "\n\n") if feast else ""
+    text = (
+        "\U0001f305 *\u0414\u043e\u0431\u0440\u043e\u0435 \u0443\u0442\u0440\u043e, " + day_str + "!*\n\n"
+        + feast_line
+        + "\u2626\ufe0f *\u041c\u043e\u043b\u0438\u0442\u0432\u0430 \u0434\u043d\u044f*\n\n"
+        + prayer
+        + "\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\U0001f64f \u0412\u0441\u0435 \u043c\u043e\u043b\u0438\u0442\u0432\u044b \u2192 @Moya\_Vera\_bot"
+    )
+    sent = 0
+    for user_id, name in users:
+        try:
+            await bot.send_message(user_id, text, parse_mode="Markdown")
+            sent += 1
+            await asyncio.sleep(0.05)  # чтобы не превысить лимит Telegram
+        except Exception:
+            pass
+    logging.info(f"Утренняя рассылка: отправлено {sent} из {len(users)}")
+
 async def angel_reminder_loop():
     """Напоминания о дне ангела"""
     await asyncio.sleep(30)
@@ -2808,6 +2899,40 @@ async def cb_edit_birth(callback: CallbackQuery):
         reply_markup=back_section("profile")
     )
     await callback.answer()
+
+@dp.callback_query(F.data == "toggle_notifications")
+async def cb_toggle_notifications(callback: CallbackQuery):
+    user_id = callback.from_user.id
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT notifications FROM users WHERE user_id=?", (user_id,))
+    row = c.fetchone()
+    current = row[0] if row and row[0] is not None else 1
+    new_val = 0 if current else 1
+    c.execute("UPDATE users SET notifications=? WHERE user_id=?", (new_val, user_id))
+    conn.commit()
+    conn.close()
+    status = "включены ✅" if new_val else "отключены 🔕"
+    await callback.answer(f"Утренние уведомления {status}", show_alert=True)
+    user = get_user(user_id)
+    await callback.message.edit_reply_markup(reply_markup=profile_menu(user))
+
+@dp.callback_query(F.data == "prayer_of_day")
+async def cb_prayer_of_day(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer("✨ Нахожу молитву дня...")
+    prayer = await get_prayer_of_day()
+    day_str = date_ru("short")
+    feast = get_todays_feast()
+    feast_line = ("\U0001f389 *" + feast + "*\n\n") if feast else ""
+    await callback.message.answer(
+        "\u2728 *\u041c\u043e\u043b\u0438\u0442\u0432\u0430 \u0434\u043d\u044f \u2014 " + day_str + "*\n\n" + feast_line + prayer,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="\U0001f64f \u0412\u0441\u0435 \u043c\u043e\u043b\u0438\u0442\u0432\u044b", callback_data="prayers")],
+            [InlineKeyboardButton(text="\U0001f3e0 \u0413\u043b\u0430\u0432\u043d\u043e\u0435 \u043c\u0435\u043d\u044e", callback_data="main_menu")],
+        ])
+    )
 
 @dp.callback_query(F.data == "profile_patron_prayer")
 async def cb_patron_prayer(callback: CallbackQuery):
