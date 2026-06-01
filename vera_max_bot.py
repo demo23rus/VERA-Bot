@@ -378,6 +378,22 @@ FASTS = {
     "Среда и пятница": "Еженедельный пост в память предательства и распятия Христа.",
 }
 
+MONTHS_RU = {
+    1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+    5: "мая", 6: "июня", 7: "июля", 8: "августа",
+    9: "сентября", 10: "октября", 11: "ноября", 12: "декабря"
+}
+
+def date_ru(fmt="full"):
+    """Возвращает дату на русском языке"""
+    now = datetime.now()
+    month = MONTHS_RU[now.month]
+    if fmt == "full":
+        return f"{now.day} {month} {now.year}"
+    elif fmt == "short":
+        return f"{now.day} {month}"
+    return f"{now.day}.{now.month:02d}"
+
 def get_todays_saints():
     today = datetime.now().strftime("%d.%m")
     result = []
@@ -894,7 +910,7 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
         await send_message(chat_id, "📅 Православный календарь:", calendar_buttons())
 
     elif payload == "cal_today":
-        today_str = datetime.now().strftime("%d %B %Y")
+        today_str = date_ru("full")
         feast = get_todays_feast()
         saints = get_todays_saints()
         text = f"📅 Сегодня {today_str}\n\n"
@@ -910,7 +926,7 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
 
     elif payload == "cal_namedays":
         saints = get_todays_saints()
-        today_str = datetime.now().strftime("%d %B")
+        today_str = date_ru("short")
         if saints:
             text = f"👼 Именинники {today_str}:\n\n"
             for name, desc in saints:
@@ -975,7 +991,7 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
 
     elif payload == "saints":
         saints = get_todays_saints()
-        today_str = datetime.now().strftime("%d %B")
+        today_str = date_ru("short")
         text = "👼 Святые\n\n"
         if saints:
             text += f"Сегодня, {today_str}, память:\n"
@@ -1346,7 +1362,7 @@ async def channel_scheduler():
     """Автопостинг 6 раз в день по МСК"""
     # МСК часы напрямую
     schedule = [
-        (7,  "утренняя молитва",     "Напиши короткий пост для православного канала — утренняя молитва или благословение на день. 3-4 предложения. Начни с эмодзи 🌅"),
+        (7,  "утренняя молитва",     f"Напиши короткий пост для православного канала — утренняя молитва или благословение на день. Сегодня {date_ru('short')}. 3-4 предложения. Начни с эмодзи 🌅. Пиши только по-русски."),
         (8,  "цитата святого",       "Напиши короткий пост для православного канала — мудрая цитата православного святого или старца с кратким пояснением. Начни с эмодзи ✝️"),
         (9,  "память святого",       ""),  # генерируется динамически
         (10, "духовное наставление", "Напиши короткий пост для православного канала — краткое духовное наставление или поучение святых отцов. Начни с эмодзи 🕯️"),
@@ -1380,7 +1396,8 @@ async def channel_scheduler():
                         dynamic_prompt = (
                             f"Напиши пост для православного канала о празднике дня: {feast}. "
                             f"Расскажи кратко что это за праздник, его смысл и как верующие его отмечают. "
-                            f"Начни с эмодзи 📅"
+                            f"Начни с фразы '📅 Сегодня, {date_ru('short')}, православные христиане празднуют...'. "
+                            f"Пиши только по-русски."
                         )
                     elif saints:
                         saint_names = ", ".join([s[0] for s in saints[:2]])
@@ -1389,7 +1406,7 @@ async def channel_scheduler():
                             f"Напиши пост для православного канала. Сегодня Церковь чтит память: {saint_names}. "
                             f"{'Описание: ' + saint_desc if saint_desc else ''} "
                             f"Расскажи кратко о жизни этого святого и чему учит его пример. "
-                            f"Начни с фразы '📅 Сегодня, (число и месяц словами), Церковь чтит память...'"
+                            f"Начни с фразы '📅 Сегодня, {date_ru('short')}, Церковь чтит память...'"
                         )
                     else:
                         dynamic_prompt = (
