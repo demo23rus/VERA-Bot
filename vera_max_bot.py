@@ -1,4 +1,5 @@
 import asyncio
+import random
 import sqlite3
 import logging
 import os
@@ -11,6 +12,13 @@ from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
 import anthropic
 import uvicorn
+try:
+    import gspread
+    from google.oauth2.service_account import Credentials
+    SHEETS_AVAILABLE = True
+except ImportError:
+    SHEETS_AVAILABLE = False
+    logging.warning("gspread не установлен — Google Sheets отключены")
 
 # ========== ЗАГРУЗКА КЛЮЧЕЙ ==========
 def load_env(path="/root/.env_vera"):
@@ -40,6 +48,9 @@ WEBHOOK_URL   = "https://sveroy.ru/webhook"
 
 logging.info(f"MAX_TOKEN: {MAX_TOKEN[:15] if MAX_TOKEN else 'EMPTY'}...")
 logging.info(f"OPENAI_KEY: {OPENAI_KEY[:15] if OPENAI_KEY else 'EMPTY'}...")
+
+CREDENTIALS_FILE = "/root/google_credentials.json"
+SPREADSHEET_ID   = "1PE7CaFuWOe_eygQqIoMAmUdJBtATbIaNfZR4cvarPCA"
 
 # ========== КЛИЕНТЫ AI ==========
 openai_client = AsyncOpenAI(api_key=OPENAI_KEY)
@@ -103,6 +114,116 @@ async def get_photo_bytes(photo_token):
 async def register_webhook():
     result = await max_request("POST", "subscriptions", {"url": WEBHOOK_URL})
     logging.info(f"Webhook регистрация: {result}")
+
+# ========== GOOGLE SHEETS ==========
+def get_spreadsheet():
+    if not SHEETS_AVAILABLE:
+        return None
+    try:
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds  = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+        client = gspread.authorize(creds)
+        return client.open_by_key(SPREADSHEET_ID)
+    except Exception as e:
+        logging.error(f"Sheets connect error: {e}")
+        return None
+
+def sheets_add_user_max(user_id, username, first_name):
+    try:
+        sp = get_spreadsheet()
+        if not sp: return
+        try:
+            sheet = sp.worksheet("MAX Бот")
+        except Exception:
+            sheet = sp.add_worksheet(title="MAX Бот", rows=2000, cols=8)
+            sheet.insert_row(["ID","Username","Имя","Дата регистрации","Последняя активность","Запросов AI","Отзывов","Пожертвований"], 1)
+        col = sheet.col_values(1)
+        if str(user_id) not in col:
+            sheet.append_row([
+                str(user_id),
+                f"@{username}" if username else "—",
+                first_name or "—",
+                datetime.now().strftime("%d.%m.%Y %H:%M"),
+                datetime.now().strftime("%d.%m.%Y %H:%M"),
+                "0", "0", "0"
+            ])
+    except Exception as e:
+        logging.error(f"Sheets add_user_max: {e}")
+
+def sheets_update_activity_max(user_id):
+    try:
+        sp = get_spreadsheet()
+        if not sp: return
+        sheet = sp.worksheet("MAX Бот")
+        col = sheet.col_values(1)
+        if str(user_id) in col:
+            row = col.index(str(user_id)) + 1
+            sheet.update_cell(row, 5, datetime.now().strftime("%d.%m.%Y %H:%M"))
+            ai_val = sheet.cell(row, 6).value or "0"
+            sheet.update_cell(row, 6, str(int(ai_val) + 1))
+    except Exception as e:
+        logging.error(f"Sheets update_activity_max: {e}")
+
+def sheets_add_review_max(user_id, username, first_name, text):
+    try:
+        sp = get_spreadsheet()
+        if not sp: return
+        try:
+            sheet = sp.worksheet("Отзывы MAX")
+        except Exception:
+            sheet = sp.add_worksheet(title="Отзывы MAX", rows=1000, cols=5)
+            sheet.insert_row(["ID","Username","Имя","Дата","Отзыв"], 1)
+        sheet.append_row([
+            str(user_id),
+            f"@{username}" if username else "—",
+            first_name or "—",
+            datetime.now().strftime("%d.%m.%Y %H:%M"),
+            text
+        ])
+        # Увеличиваем счётчик отзывов
+        try:
+            main_sheet = sp.worksheet("MAX Бот")
+            col = main_sheet.col_values(1)
+            if str(user_id) in col:
+                row = col.index(str(user_id)) + 1
+                rev_val = main_sheet.cell(row, 7).value or "0"
+                main_sheet.update_cell(row, 7, str(int(rev_val) + 1))
+        except Exception:
+            pass
+    except Exception as e:
+        logging.error(f"Sheets add_review_max: {e}")
+
+def sheets_add_donation(user_id, username, first_name, amount, source="MAX"):
+    """Записывает пожертвование в общий лист Пожертвования"""
+    try:
+        sp = get_spreadsheet()
+        if not sp: return
+        try:
+            sheet = sp.worksheet("Пожертвования")
+        except Exception:
+            sheet = sp.add_worksheet(title="Пожертвования", rows=2000, cols=6)
+            sheet.insert_row(["ID","Username","Имя","Сумма (руб)","Дата","Источник"], 1)
+        sheet.append_row([
+            str(user_id),
+            f"@{username}" if username else "—",
+            first_name or "—",
+            str(amount),
+            datetime.now().strftime("%d.%m.%Y %H:%M"),
+            source
+        ])
+        # Обновляем счётчик в основном листе MAX
+        if source == "MAX":
+            try:
+                main_sheet = sp.worksheet("MAX Бот")
+                col = main_sheet.col_values(1)
+                if str(user_id) in col:
+                    row = col.index(str(user_id)) + 1
+                    don_val = main_sheet.cell(row, 8).value or "0"
+                    main_sheet.update_cell(row, 8, str(int(don_val) + 1))
+            except Exception:
+                pass
+    except Exception as e:
+        logging.error(f"Sheets add_donation: {e}")
 
 # ========== КНОПКИ ==========
 def btn(text, payload):
@@ -342,24 +463,54 @@ async def ask_claude(question, depth="medium"):
         "deep":   ("Дай глубокий богословский ответ.", 1200),
     }
     system_add, max_tok = depths.get(depth, depths["medium"])
+    greetings = [
+        "Душа моя", "Чадо", "Возлюбленное чадо", "Дорогой брат во Христе",
+        "Дорогая сестра во Христе", "Дорогой друг", "Брате", "Сестра",
+        "Возлюбленный во Христе", "Дорогой мой"
+    ]
+    greeting = random.choice(greetings)
     try:
         msg = claude_client.messages.create(
             model="claude-sonnet-4-5",
             max_tokens=max_tok,
-            system="Ты православный священник с многолетним опытом пастырского служения. "
-        "Отвечаешь тепло, по-отечески — как батюшка на исповеди или после службы. "
-        "Говоришь просто и сердечно, не сухо. "
-        "Можешь обращаться: чадо, душа моя, Господь милостив. "
-        "Опираешься на Писание и святых отцов — объясняешь живым языком. "
-        "Никогда не осуждаешь, всегда утешаешь. "
-        "В конце — краткое благословение или молитвенное пожелание. "
-        "Отвечаешь только по-русски. " + system_add,
+            system=(
+                "Ты православный священник с многолетним опытом пастырского служения. "
+                "Отвечаешь тепло, по-отечески — как батюшка на исповеди или после службы. "
+                "Говоришь просто и сердечно, не сухо. "
+                f"ОБЯЗАТЕЛЬНО начинай каждый ответ с обращения '{greeting},' — это первое слово ответа. "
+                "Опираешься на Писание и святых отцов — объясняешь живым языком. "
+                "Никогда не осуждаешь, всегда утешаешь. "
+                "В конце — краткое благословение или молитвенное пожелание. "
+                "Отвечаешь только по-русски. " + system_add
+            ),
             messages=[{"role": "user", "content": question}]
         )
         return msg.content[0].text
     except Exception as e:
         logging.error(f"Ошибка Claude: {e}")
         return "error"
+
+async def transcribe_voice_max(audio_url: str) -> str:
+    """Скачиваем голосовое и транскрибируем через Whisper"""
+    try:
+        headers = {"Authorization": MAX_TOKEN}
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.get(audio_url, headers=headers)
+            audio_bytes = r.content
+        # Сохраняем во временный файл
+        tmp_path = "/tmp/vera_voice_max.ogg"
+        with open(tmp_path, "wb") as f:
+            f.write(audio_bytes)
+        with open(tmp_path, "rb") as f:
+            response = await openai_client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                language="ru"
+            )
+        return response.text
+    except Exception as e:
+        logging.error(f"Ошибка транскрибации: {e}")
+        return None
 
 async def analyze_photo(photo_bytes, photo_type):
     prompt = (
@@ -624,6 +775,9 @@ LIBRARY_TEXTS = {
 # ========== ОБРАБОТЧИКИ ==========
 async def handle_start(chat_id, user_id, first_name, username):
     user = get_user(user_id, username, first_name)
+    # Записываем в Sheets (в фоне)
+    import threading
+    threading.Thread(target=sheets_add_user_max, args=(user_id, username, first_name), daemon=True).start()
     if not user.get("onboarded"):
         await send_message(chat_id,
             "☦️ Добро пожаловать в «С верой»!\n\n"
@@ -1082,6 +1236,9 @@ async def handle_text(chat_id, user_id, text, first_name=""):
         await send_message(chat_id, "🙏 Отвечаю...")
         answer = await ask_claude(text, depth)
         set_step(user_id, "idle")
+        # Обновляем активность в Sheets
+        import threading
+        threading.Thread(target=sheets_update_activity_max, args=(user_id,), daemon=True).start()
         if answer == "error":
             try:
                 await max_request("POST", f"messages?chat_id=8935471523",
@@ -1117,12 +1274,57 @@ async def handle_photo(chat_id, user_id, photo_token):
 # ========== АВТОПОСТИНГ В КАНАЛ ==========
 MAX_CHANNEL_ID = -75405929805299
 
-async def post_to_channel(text):
+# Иконы для главных праздников (Wikimedia Commons — свободные изображения)
+FEAST_ICONS = {
+    "07.01": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/Nativity_icon_13th_century_Sinai.jpg/800px-Nativity_icon_13th_century_Sinai.jpg",
+    "19.01": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0e/Theophany_icon.jpg/800px-Theophany_icon.jpg",
+    "07.04": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/Annunciation_icon.jpg/800px-Annunciation_icon.jpg",
+    "19.08": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e5/Transfiguration_by_Feofan_Grek.jpg/800px-Transfiguration_by_Feofan_Grek.jpg",
+    "28.08": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cf/Dormition_icon.jpg/800px-Dormition_icon.jpg",
+    "14.10": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Pokrov_icon.jpg/800px-Pokrov_icon.jpg",
+    "19.12": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Nicholas_icon.jpg/800px-Nicholas_icon.jpg",
+    "22.05": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Nicholas_icon.jpg/800px-Nicholas_icon.jpg",
+    "06.05": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8c/George_icon.jpg/800px-George_icon.jpg",
+    "02.05": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b0/Matrona_icon.jpg/800px-Matrona_icon.jpg",
+    "08.10": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/Sergius_icon.jpg/800px-Sergius_icon.jpg",
+}
+
+async def post_to_channel(text, photo_url=None):
     try:
+        if photo_url:
+            # Сначала загружаем фото в MAX
+            headers = {"Authorization": MAX_TOKEN}
+            async with httpx.AsyncClient(timeout=30) as client:
+                # Скачиваем фото
+                r = await client.get(photo_url)
+                if r.status_code == 200:
+                    # Загружаем в MAX как фото
+                    files_data = {"data": r.content}
+                    upload = await client.post(
+                        f"{MAX_API}/uploads?type=photo",
+                        content=r.content,
+                        headers={"Authorization": MAX_TOKEN, "Content-Type": "image/jpeg"}
+                    )
+                    upload_data = upload.json()
+                    token = upload_data.get("token") or upload_data.get("photos", [{}])[0].get("token", "")
+                    if token:
+                        payload = {
+                            "text": text,
+                            "attachments": [{"type": "image", "payload": {"token": token}}]
+                        }
+                        result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload)
+                        logging.info(f"Канал: пост с фото отправлен")
+                        return
+        # Без фото — просто текст
         result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", {"text": text})
         logging.info(f"Канал: пост отправлен: {result}")
     except Exception as e:
         logging.error(f"Канал: ошибка отправки: {e}")
+        # Fallback — отправляем без фото
+        try:
+            await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", {"text": text})
+        except Exception:
+            pass
 
 async def generate_channel_post(prompt):
     try:
@@ -1141,25 +1343,70 @@ async def generate_channel_post(prompt):
         return None
 
 async def channel_scheduler():
-    """Автопостинг 6 раз в день по МСК (UTC+3)"""
-    # МСК 07:00, 08:00, 09:00, 10:00, 12:00, 20:00 = UTC 04:00, 05:00, 06:00, 07:00, 09:00, 17:00
+    """Автопостинг 6 раз в день по МСК"""
+    # МСК часы напрямую
     schedule = [
-        (4,  0, "утренняя молитва",    "Напиши короткий пост для православного канала — утренняя молитва или благословение на день. 3-4 предложения. Начни с эмодзи 🌅"),
-        (5,  0, "цитата святого",      "Напиши короткий пост для православного канала — мудрая цитата православного святого или старца с кратким пояснением. Начни с эмодзи ✝️"),
-        (6,  0, "факт о празднике",    "Напиши короткий пост для православного канала — интересный факт о православном празднике или святом дня. Начни с эмодзи 📅"),
-        (7,  0, "духовное наставление","Напиши короткий пост для православного канала — краткое духовное наставление или поучение святых отцов. Начни с эмодзи 🕯️"),
-        (9,  0, "история святого",     "Напиши короткий пост для православного канала — трогательная или поучительная история из жизни православного святого. Начни с эмодзи 👼"),
-        (17, 0, "вечерняя молитва",    "Напиши короткий пост для православного канала — вечерняя молитва или слова утешения на конец дня. Начни с эмодзи 🌙"),
+        (7,  "утренняя молитва",     "Напиши короткий пост для православного канала — утренняя молитва или благословение на день. 3-4 предложения. Начни с эмодзи 🌅"),
+        (8,  "цитата святого",       "Напиши короткий пост для православного канала — мудрая цитата православного святого или старца с кратким пояснением. Начни с эмодзи ✝️"),
+        (9,  "память святого",       ""),  # генерируется динамически
+        (10, "духовное наставление", "Напиши короткий пост для православного канала — краткое духовное наставление или поучение святых отцов. Начни с эмодзи 🕯️"),
+        (12, "история святого",      "Напиши короткий пост для православного канала — трогательная или поучительная история из жизни православного святого. Начни с эмодзи 👼"),
+        (20, "вечерняя молитва",     "Напиши короткий пост для православного канала — вечерняя молитва или слова утешения на конец дня. Начни с эмодзи 🌙"),
     ]
+    sent_today = set()  # флаг отправленных постов
+
     while True:
-        now = datetime.utcnow()
-        for hour, minute, name, prompt in schedule:
-            if now.hour == hour and now.minute == minute:
-                logging.info(f"Канал: публикую пост — {name}")
-                text = await generate_channel_post(prompt)
+        # Московское время = UTC+3
+        now_utc = datetime.utcnow()
+        msk_hour = (now_utc.hour + 3) % 24
+        today = now_utc.strftime("%Y-%m-%d")
+
+        # Сброс флага в полночь МСК (21:00 UTC)
+        if now_utc.hour == 21 and now_utc.minute == 0:
+            sent_today.clear()
+            logging.info("Канал: сброс флага отправленных постов")
+
+        for hour, name, prompt in schedule:
+            key = f"{today}_{hour}"
+            if msk_hour == hour and now_utc.minute < 30 and key not in sent_today:
+                sent_today.add(key)
+                logging.info(f"Канал МСК {hour}:00 — {name}")
+
+                # Для поста о святом дня — формируем динамически
+                if name == "память святого":
+                    feast = get_todays_feast()
+                    saints = get_todays_saints()
+                    if feast:
+                        dynamic_prompt = (
+                            f"Напиши пост для православного канала о празднике дня: {feast}. "
+                            f"Расскажи кратко что это за праздник, его смысл и как верующие его отмечают. "
+                            f"Начни с эмодзи 📅"
+                        )
+                    elif saints:
+                        saint_names = ", ".join([s[0] for s in saints[:2]])
+                        saint_desc = saints[0][1] if saints[0][1] else ""
+                        dynamic_prompt = (
+                            f"Напиши пост для православного канала. Сегодня Церковь чтит память: {saint_names}. "
+                            f"{'Описание: ' + saint_desc if saint_desc else ''} "
+                            f"Расскажи кратко о жизни этого святого и чему учит его пример. "
+                            f"Начни с фразы '📅 Сегодня, (число и месяц словами), Церковь чтит память...'"
+                        )
+                    else:
+                        dynamic_prompt = (
+                            "Напиши короткий пост для православного канала — интересный факт или поучение. "
+                            "Начни с эмодзи 📅"
+                        )
+                    text = await generate_channel_post(dynamic_prompt)
+                else:
+                    text = await generate_channel_post(prompt)
+
                 if text:
-                    await post_to_channel(text)
-                await asyncio.sleep(61)
+                    # Добавляем иконку если есть для этого дня
+                    today_key = datetime.now().strftime("%d.%m")
+                    icon_url = FEAST_ICONS.get(today_key) if name == "память святого" else None
+                    await post_to_channel(text, photo_url=icon_url)
+                await asyncio.sleep(60)
+
         await asyncio.sleep(30)
 
 # ========== FASTAPI ==========
@@ -1196,6 +1443,47 @@ async def webhook(request: Request):
                         user = get_user(user_id)
                         if user.get("step") in ("photo_church", "photo_icon"):
                             await handle_photo(chat_id, user_id, token)
+                            return JSONResponse({"ok": True})
+
+                # Голосовое сообщение
+                elif att.get("type") in ("audio", "voice"):
+                    audio_url = att.get("payload", {}).get("url", "")
+                    if not audio_url:
+                        # Пробуем достать через token
+                        audio_token = att.get("payload", {}).get("token", "")
+                        if audio_token:
+                            audio_url = f"{MAX_API}/audio/{audio_token}"
+                    if audio_url:
+                        user = get_user(user_id)
+                        step = user.get("step", "")
+                        if step.startswith("question_"):
+                            await send_message(chat_id, "🎤 Распознаю голосовое...")
+                            recognized = await transcribe_voice_max(audio_url)
+                            if recognized:
+                                await send_message(chat_id, "📝 Распознал: " + recognized + "\n\n⏳ Отвечаю...")
+                                depth = step.replace("question_", "")
+                                answer = await ask_claude(recognized, depth)
+                                if answer == "error":
+                                    try:
+                                        await max_request("POST", f"messages?chat_id={OWNER_ID}",
+                                            {"text": "⚠️ Ошибка Claude (голос MAX)\nПользователь: " + str(user_id) + "\nВопрос: " + recognized[:100]})
+                                    except Exception:
+                                        pass
+                                    await send_message(chat_id, "⚠️ Не удалось получить ответ. Попробуйте позже.",
+                                        [[btn("🔄 Попробовать снова", "ask_question")],
+                                         [link_btn("📢 Сообщить о проблеме", "https://t.me/Boss023rus")],
+                                         [btn("🏠 Меню", "main_menu")]])
+                                else:
+                                    await send_message(chat_id, answer,
+                                        [[btn("❓ Ещё вопрос", "ask_question"), btn("🏠 Меню", "main_menu")]])
+                                set_step(user_id, "idle")
+                            else:
+                                await send_message(chat_id, "⚠️ Не удалось распознать голосовое. Попробуйте написать текстом.",
+                                    [[btn("🏠 Меню", "main_menu")]])
+                            return JSONResponse({"ok": True})
+                        else:
+                            await send_message(chat_id, "☦️ Голосовые работают только при вводе вопроса о вере. Нажмите Задать вопрос в меню.",
+                                main_menu_buttons())
                             return JSONResponse({"ok": True})
 
             text = body.get("text", "").strip()
