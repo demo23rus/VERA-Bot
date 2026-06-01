@@ -83,30 +83,15 @@ async def send_message(chat_id, text, buttons=None):
         payload["attachments"] = [{"type": "inline_keyboard", "payload": {"buttons": buttons}}]
     return await max_request("POST", f"messages?chat_id={chat_id}", payload)
 
-async def get_photo_bytes(photo_token):
-    headers = {"Authorization": MAX_TOKEN}
+async def get_photo_bytes(photo_url):
+    """Скачиваем фото по прямому URL"""
     try:
         async with httpx.AsyncClient(timeout=30) as client:
-            # Сначала получаем URL фото из API
-            r = await client.get(f"{MAX_API}/photos/{photo_token}", headers=headers)
-            data = r.json()
-            logging.info(f"Photo API response: {data}")
-            # Пробуем разные варианты структуры ответа
-            photo_url = (
-                data.get("url") or
-                data.get("photo", {}).get("url") or
-                (data.get("photos", [{}])[0].get("url") if data.get("photos") else None)
-            )
-            if photo_url:
-                # Скачиваем само фото по URL
-                r2 = await client.get(photo_url)
-                return r2.content
-            else:
-                # Если не JSON — возможно это уже бинарные данные
-                if r.content and len(r.content) > 1000:
-                    return r.content
-                logging.error(f"Нет URL фото в ответе: {data}")
-                return None
+            r = await client.get(photo_url)
+            if r.status_code == 200 and len(r.content) > 100:
+                return r.content
+            logging.error(f"Ошибка скачивания фото: {r.status_code}")
+            return None
     except Exception as e:
         logging.error(f"Ошибка get_photo: {e}")
         return None
@@ -1455,12 +1440,22 @@ async def webhook(request: Request):
             # Фото
             for att in body.get("attachments", []):
                 if att.get("type") == "image":
-                    token = att.get("payload", {}).get("token", "")
-                    if token:
+                    payload_data = att.get("payload", {})
+                    # В MAX фото передаётся как прямой URL в payload
+                    photo_url = (
+                        payload_data.get("url") or
+                        payload_data.get("photo_url") or
+                        # Пробуем достать из photos массива
+                        (payload_data.get("photos", [{}])[0].get("url") if payload_data.get("photos") else None)
+                    )
+                    logging.info(f"Фото attachment payload: {payload_data}")
+                    if photo_url:
                         user = get_user(user_id)
                         if user.get("step") in ("photo_church", "photo_icon"):
-                            await handle_photo(chat_id, user_id, token)
+                            await handle_photo(chat_id, user_id, photo_url)
                             return JSONResponse({"ok": True})
+                    else:
+                        logging.error(f"Не найден URL фото в payload: {payload_data}")
 
                 # Голосовое сообщение
                 elif att.get("type") in ("audio", "voice"):
