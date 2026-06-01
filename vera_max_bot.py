@@ -76,8 +76,26 @@ async def get_photo_bytes(photo_token):
     headers = {"Authorization": MAX_TOKEN}
     try:
         async with httpx.AsyncClient(timeout=30) as client:
+            # Сначала получаем URL фото из API
             r = await client.get(f"{MAX_API}/photos/{photo_token}", headers=headers)
-            return r.content
+            data = r.json()
+            logging.info(f"Photo API response: {data}")
+            # Пробуем разные варианты структуры ответа
+            photo_url = (
+                data.get("url") or
+                data.get("photo", {}).get("url") or
+                (data.get("photos", [{}])[0].get("url") if data.get("photos") else None)
+            )
+            if photo_url:
+                # Скачиваем само фото по URL
+                r2 = await client.get(photo_url)
+                return r2.content
+            else:
+                # Если не JSON — возможно это уже бинарные данные
+                if r.content and len(r.content) > 1000:
+                    return r.content
+                logging.error(f"Нет URL фото в ответе: {data}")
+                return None
     except Exception as e:
         logging.error(f"Ошибка get_photo: {e}")
         return None
@@ -326,15 +344,22 @@ async def ask_claude(question, depth="medium"):
     system_add, max_tok = depths.get(depth, depths["medium"])
     try:
         msg = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5",
             max_tokens=max_tok,
-            system="Ты православный помощник — отвечаешь тепло, доступно и без осуждения. " + system_add,
+            system="Ты православный священник с многолетним опытом пастырского служения. "
+        "Отвечаешь тепло, по-отечески — как батюшка на исповеди или после службы. "
+        "Говоришь просто и сердечно, не сухо. "
+        "Можешь обращаться: чадо, душа моя, Господь милостив. "
+        "Опираешься на Писание и святых отцов — объясняешь живым языком. "
+        "Никогда не осуждаешь, всегда утешаешь. "
+        "В конце — краткое благословение или молитвенное пожелание. "
+        "Отвечаешь только по-русски. " + system_add,
             messages=[{"role": "user", "content": question}]
         )
         return msg.content[0].text
     except Exception as e:
         logging.error(f"Ошибка Claude: {e}")
-        return "Не удалось получить ответ. Попробуйте позже."
+        return "error"
 
 async def analyze_photo(photo_bytes, photo_type):
     prompt = (
@@ -873,7 +898,7 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
         await send_message(chat_id, "🙏 Нахожу молитву...")
         try:
             msg = claude_client.messages.create(
-                model="claude-sonnet-4-20250514",
+                model="claude-sonnet-4-5",
                 max_tokens=600,
                 system="Напиши краткую православную молитву святому. 8-12 строк. Начни с обращения. Закончи Аминь.",
                 messages=[{"role": "user", "content": f"Напиши молитву святому: {name}"}]
@@ -1057,9 +1082,21 @@ async def handle_text(chat_id, user_id, text, first_name=""):
         await send_message(chat_id, "🙏 Отвечаю...")
         answer = await ask_claude(text, depth)
         set_step(user_id, "idle")
-        await send_message(chat_id, answer, [
-            [btn("❓ Ещё вопрос", "ask_question"), btn("🏠 Меню", "main_menu")],
-        ])
+        if answer == "error":
+            try:
+                await max_request("POST", f"messages?chat_id=8935471523",
+                    {"text": f"⚠️ Ошибка Claude в MAX боте\nПользователь: {user_id}\nВопрос: {text[:100]}"})
+            except Exception:
+                pass
+            await send_message(chat_id,
+                "⚠️ Не удалось получить ответ. Попробуйте позже.",
+                [[btn("🔄 Попробовать снова", "ask_question")],
+                 [link_btn("📢 Сообщить о проблеме", "https://t.me/Boss023rus")],
+                 [btn("🏠 Меню", "main_menu")]])
+        else:
+            await send_message(chat_id, answer, [
+                [btn("❓ Ещё вопрос", "ask_question"), btn("🏠 Меню", "main_menu")],
+            ])
         return
 
     await send_message(chat_id, "☦️ Главное меню:", main_menu_buttons())
@@ -1090,12 +1127,15 @@ async def post_to_channel(text):
 async def generate_channel_post(prompt):
     try:
         msg = claude_client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-sonnet-4-5",
             max_tokens=600,
             system="Ты православный помощник. Пиши тепло, кратко, душевно. Без лишних слов. Без хэштегов.",
             messages=[{"role": "user", "content": prompt}]
         )
-        return msg.content[0].text
+        text = msg.content[0].text
+        # Добавляем ссылку на бота в конец каждого поста
+        text += "\n\n☦️ Бот → @id232007136009_1_bot"
+        return text
     except Exception as e:
         logging.error(f"Ошибка генерации поста: {e}")
         return None
