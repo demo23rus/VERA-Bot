@@ -610,6 +610,7 @@ async def handle_start(chat_id, user_id, first_name, username):
             "🏛️ Святые места России и мира\n"
             "📸 Узнать храм или икону по фото\n"
             "❓ Задать вопрос о вере\n\n"
+            "📢 Наш канал → https://max.ru/-75405929805299\n\n"
             "Чем могу помочь? ☦️",
             main_menu_buttons()
         )
@@ -620,7 +621,7 @@ async def handle_start(chat_id, user_id, first_name, username):
     else:
         name = user.get("church_name") or first_name
         await send_message(chat_id,
-            f"☦️ С возвращением, {name}!\n\nРад видеть вас снова 🕊️\n\nЧем могу помочь?",
+            f"☦️ С возвращением, {name}!\n\nРад видеть вас снова 🕊️\n\nЧем могу помочь?\n\n📢 Наш канал → https://max.ru/-75405929805299",
             main_menu_buttons()
         )
 
