@@ -2334,7 +2334,7 @@ async def cb_cal_today(callback: CallbackQuery):
     saints   = get_todays_saints()
     weekday  = ["Понедельник","Вторник","Среда","Четверг","Пятница","Суббота","Воскресенье"][today.weekday()]
 
-    text = f"📅 *{date_ru("full")}*, {weekday}\n\n"
+    text = "📅 *" + date_ru('full') + "*, " + weekday + "\n\n"
 
     if feast:
         text += f"🎉 *Праздник:* {feast}\n\n"
