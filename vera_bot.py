@@ -2287,6 +2287,23 @@ async def cb_prayers(callback: CallbackQuery):
     )
     await callback.answer()
 
+@dp.callback_query(F.data == "prayer_of_day")
+async def cb_prayer_of_day(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer("✨ Нахожу молитву дня...")
+    prayer = await get_prayer_of_day()
+    day_str = date_ru("short")
+    feast = get_todays_feast()
+    feast_line = ("🎉 *" + feast + "*\n\n") if feast else ""
+    await callback.message.answer(
+        "✨ *Молитва дня — " + day_str + "*\n\n" + feast_line + prayer,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🙏 Все молитвы", callback_data="prayers")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+        ])
+    )
+
 @dp.callback_query(F.data.startswith("prayer_"))
 async def cb_prayer(callback: CallbackQuery):
     key = callback.data.replace("prayer_", "")
@@ -2916,23 +2933,6 @@ async def cb_toggle_notifications(callback: CallbackQuery):
     await callback.answer(f"Утренние уведомления {status}", show_alert=True)
     user = get_user(user_id)
     await callback.message.edit_reply_markup(reply_markup=profile_menu(user))
-
-@dp.callback_query(F.data == "prayer_of_day")
-async def cb_prayer_of_day(callback: CallbackQuery):
-    await callback.answer()
-    await callback.message.answer("✨ Нахожу молитву дня...")
-    prayer = await get_prayer_of_day()
-    day_str = date_ru("short")
-    feast = get_todays_feast()
-    feast_line = ("\U0001f389 *" + feast + "*\n\n") if feast else ""
-    await callback.message.answer(
-        "\u2728 *\u041c\u043e\u043b\u0438\u0442\u0432\u0430 \u0434\u043d\u044f \u2014 " + day_str + "*\n\n" + feast_line + prayer,
-        parse_mode="Markdown",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="\U0001f64f \u0412\u0441\u0435 \u043c\u043e\u043b\u0438\u0442\u0432\u044b", callback_data="prayers")],
-            [InlineKeyboardButton(text="\U0001f3e0 \u0413\u043b\u0430\u0432\u043d\u043e\u0435 \u043c\u0435\u043d\u044e", callback_data="main_menu")],
-        ])
-    )
 
 @dp.callback_query(F.data == "profile_patron_prayer")
 async def cb_patron_prayer(callback: CallbackQuery):
