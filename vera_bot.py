@@ -3209,7 +3209,7 @@ async def handle_voice(message: Message):
     user_id = message.from_user.id
 
     if not step or step == "idle":
-        await message.answer("Выберите функцию из меню 👇", reply_markup=main_menu())
+        await message.answer("☦️ Выберите функцию из меню 👇", reply_markup=main_menu())
         return
 
     await message.answer("🎤 Распознаю голосовое...")
@@ -3219,10 +3219,69 @@ async def handle_voice(message: Message):
         await bot.download_file(file.file_path, file_path)
         text = await transcribe_voice(file_path)
         await message.answer(f"📝 *Распознал:* {text}\n\n⏳ Обрабатываю...", parse_mode="Markdown")
-        message.text = text
-        await handle_text(message)
+
+        # Вместо message.text = text (frozen!) — обрабатываем текст напрямую
+        if step.startswith("question_"):
+            depth = step.replace("question_", "")
+            await message.answer("🙏 Молюсь... отвечаю...")
+            answer = await ask_claude(text, depth)
+            asyncio.create_task(asyncio.to_thread(sheets_update_activity, user_id))
+            depth_labels = {"short": "💬 Кратко", "medium": "📖 Развёрнуто", "deep": "🙏 Глубоко"}
+            if answer == "error":
+                try:
+                    await bot.send_message(8935471523,
+                        f"⚠️ Ошибка Claude (голос) в @Moya_Vera_bot\nПользователь: {user_id}\nВопрос: {text[:100]}")
+                except Exception:
+                    pass
+                await message.answer(
+                    "⚠️ Не удалось получить ответ. Попробуйте чуть позже.",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="ask_question")],
+                        [InlineKeyboardButton(text="📢 Сообщить о проблеме", url="https://t.me/Boss023rus")],
+                        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+                    ])
+                )
+            else:
+                await message.answer(
+                    f"{depth_labels.get(depth, '')} *Ответ:*\n\n{answer}",
+                    parse_mode="Markdown",
+                    reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                        [InlineKeyboardButton(text="❓ Задать ещё вопрос", callback_data="ask_question")],
+                        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+                    ])
+                )
+            set_step(user_id, "idle")
+        elif step == "review":
+            asyncio.create_task(asyncio.to_thread(
+                add_review_to_sheet, user_id,
+                message.from_user.username or "",
+                message.from_user.first_name or "", text
+            ))
+            set_step(user_id, "idle")
+            await message.answer(
+                "☦️ *Спасибо за ваш отзыв!*\n\nДа хранит вас Господь 🕊️",
+                parse_mode="Markdown", reply_markup=main_menu()
+            )
+        else:
+            await message.answer(
+                "☦️ Голосовые сообщения работают только при вводе вопроса о вере.\n"
+                "Нажмите *Задать вопрос* в меню 👇",
+                parse_mode="Markdown", reply_markup=main_menu()
+            )
     except Exception as e:
-        await message.answer(f"Ошибка распознавания: {e}", reply_markup=back_menu())
+        logging.error(f"Ошибка голосового: {e}")
+        try:
+            await bot.send_message(8935471523, f"⚠️ Ошибка голосового в @Moya_Vera_bot\n{e}")
+        except Exception:
+            pass
+        await message.answer(
+            "⚠️ Не удалось обработать голосовое сообщение. Попробуйте написать текстом.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔄 Попробовать снова", callback_data="ask_question")],
+                [InlineKeyboardButton(text="📢 Сообщить о проблеме", url="https://t.me/Boss023rus")],
+                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+            ])
+        )
 
 # ========== ОБРАБОТКА ТЕКСТА ==========
 @dp.message(F.text)
