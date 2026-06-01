@@ -1,3 +1,21 @@
+import random
+
+MONTHS_RU = {
+    1: "января", 2: "февраля", 3: "марта", 4: "апреля",
+    5: "мая", 6: "июня", 7: "июля", 8: "августа",
+    9: "сентября", 10: "октября", 11: "ноября", 12: "декабря"
+}
+
+def date_ru(fmt="full"):
+    from datetime import datetime as _dt
+    now = _dt.now()
+    month = MONTHS_RU[now.month]
+    if fmt == "full":
+        return f"{now.day} {month} {now.year}"
+    elif fmt == "short":
+        return f"{now.day} {month}"
+    return f"{now.day}.{now.month:02d}"
+
 import asyncio
 import sqlite3
 import logging
@@ -1897,7 +1915,7 @@ async def transcribe_voice(file_path: str) -> str:
 
 # ========== КАНАЛ — АВТОПОСТИНГ ==========
 async def get_daily_saint() -> str:
-    today = datetime.now().strftime("%d %B")
+    today = date_ru("short")
     feast = get_todays_feast()
     saints = get_todays_saints()
 
@@ -1934,7 +1952,7 @@ async def get_daily_quote() -> str:
     ]
     import random
     text_q, author = random.choice(quotes)
-    today_str = datetime.now().strftime("%d %B")
+    today_str = date_ru("short")
     return (
         f"✨ *СЛОВО НА ДЕНЬ • {today_str}*\n\n"
         f"«{text_q}»\n\n"
@@ -1944,7 +1962,7 @@ async def get_daily_quote() -> str:
     )
 
 async def get_daily_gospel() -> str:
-    today = datetime.now().strftime("%d %B")
+    today = date_ru("short")
     try:
         message = claude_client.messages.create(
             model="claude-sonnet-4-5",
@@ -1991,7 +2009,7 @@ async def channel_post_loop():
     while True:
         now = datetime.now()
         hour, minute = now.hour, now.minute
-        today_str = now.strftime("%d %B")
+        today_str = date_ru("short")
 
         try:
             # 07:00 — Утренняя молитва
@@ -2225,7 +2243,7 @@ async def cb_cal_today(callback: CallbackQuery):
     saints   = get_todays_saints()
     weekday  = ["Понедельник","Вторник","Среда","Четверг","Пятница","Суббота","Воскресенье"][today.weekday()]
 
-    text = f"📅 *{today.strftime('%d %B %Y')}*, {weekday}\n\n"
+    text = f"📅 *{date_ru("full")}*, {weekday}\n\n"
 
     if feast:
         text += f"🎉 *Праздник:* {feast}\n\n"
@@ -2276,7 +2294,7 @@ async def cb_kreschenije(callback: CallbackQuery):
 @dp.callback_query(F.data == "cal_namedays")
 async def cb_namedays(callback: CallbackQuery):
     saints = get_todays_saints()
-    today  = datetime.now().strftime("%d %B")
+    today  = date_ru("short")
     if saints:
         text = f"👼 *Именинники {today}:*\n\n"
         for name, desc in saints:
@@ -2407,7 +2425,7 @@ async def cb_save_sacr(callback: CallbackQuery):
 @dp.callback_query(F.data == "saints")
 async def cb_saints(callback: CallbackQuery):
     today_saints = get_todays_saints()
-    today_str    = datetime.now().strftime("%d %B")
+    today_str    = date_ru("short")
     text = f"👼 *Святые*\n\n"
     if today_saints:
         text += f"*Сегодня, {today_str}, память:*\n"
