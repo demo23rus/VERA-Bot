@@ -233,6 +233,7 @@ def back_main():
 
 def prayers_buttons():
     return [
+        [btn("✨ Молитва дня", "prayer_of_day")],
         [btn("🌅 Утренняя (рус)", "prayer_morning_ru"), btn("🌅 Утренняя (цс)", "prayer_morning_cs")],
         [btn("🌙 Вечерняя (рус)", "prayer_evening_ru"), btn("🌙 Вечерняя (цс)", "prayer_evening_cs")],
         [btn("🍽️ Перед едой", "prayer_before_meal"), btn("✝️ Символ веры", "prayer_symbol")],
@@ -404,7 +405,19 @@ def init_db():
         church_name TEXT DEFAULT '',
         birth_date TEXT DEFAULT '',
         angel_day TEXT DEFAULT '',
-        onboarded INTEGER DEFAULT 0
+        onboarded INTEGER DEFAULT 0,
+        notifications INTEGER DEFAULT 1,
+        remind_days INTEGER DEFAULT 3
+    )""")
+    for col in ["notifications INTEGER DEFAULT 1", "remind_days INTEGER DEFAULT 3"]:
+        try:
+            c.execute(f"ALTER TABLE users ADD COLUMN {col}")
+            conn.commit()
+        except Exception:
+            pass
+    c.execute("""CREATE TABLE IF NOT EXISTS daily_prayer_cache (
+        date TEXT PRIMARY KEY,
+        prayer TEXT
     )""")
     c.execute("""CREATE TABLE IF NOT EXISTS favorites (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -432,7 +445,7 @@ def get_user(user_id, username="", first_name=""):
         c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
         row = c.fetchone()
     conn.close()
-    cols = ["user_id","username","first_name","step","church_name","birth_date","angel_day","onboarded"]
+    cols = ["user_id","username","first_name","step","church_name","birth_date","angel_day","onboarded","notifications","remind_days"]
     return dict(zip(cols, row))
 
 def set_step(user_id, step):
@@ -812,6 +825,17 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
     elif payload == "prayers":
         await send_message(chat_id, "🙏 Выберите молитву:", prayers_buttons())
 
+    elif payload == "prayer_of_day":
+        await send_message(chat_id, "✨ Нахожу молитву дня...")
+        prayer = await get_prayer_of_day_max()
+        day_str = date_ru("short")
+        feast = get_todays_feast()
+        feast_line = ("🎉 " + feast + "\n\n") if feast else ""
+        await send_message(chat_id,
+            "✨ Молитва дня — " + day_str + "\n\n" + feast_line + prayer,
+            [[btn("🙏 Все молитвы", "prayers"), btn("🏠 Меню", "main_menu")]]
+        )
+
     elif payload.startswith("prayer_"):
         key = payload
         prayer_data = PRAYER_TEXTS.get(key)
@@ -1015,11 +1039,14 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
         church = user.get("church_name") or "не указано"
         birth = user.get("birth_date") or "не указана"
         angel = user.get("angel_day") or "не найден"
+        notif = user.get("notifications", 1)
+        notif_btn = "🔔 Уведомления: ВКЛ" if notif else "🔕 Уведомления: ВЫКЛ"
         await send_message(chat_id,
             f"👤 Мой профиль\n\n✏️ Имя: {church}\n🎂 Дата рождения: {birth}\n👼 День ангела: {angel}",
             [
                 [btn("✏️ Изменить имя", "profile_edit_name")],
                 [btn("🎂 Изменить дату рождения", "profile_edit_birth")],
+                [btn(notif_btn, "toggle_notifications")],
                 [btn("⭐ Избранные молитвы", "favorites")],
                 [btn("🙏 Молитва покровителю", "profile_patron_prayer")],
                 [btn("🕯️ Пожертвование", "donate")],
@@ -1067,6 +1094,16 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
         except Exception as e:
             logging.error(f"Ошибка молитвы: {e}")
             await send_message(chat_id, "🙏 Обратитесь к своему святому своими словами.", [[btn("◀️ Профиль", "profile")]])
+
+    elif payload == "toggle_notifications":
+        notif = get_user(user_id).get("notifications", 1)
+        new_val = 0 if notif else 1
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("UPDATE users SET notifications=? WHERE user_id=?", (new_val, user_id))
+        conn.commit()
+        conn.close()
+        status = "включены ✅" if new_val else "отключены 🔕"
+        await send_message(chat_id, f"Утренние уведомления {status}", back_main())
 
     elif payload == "ask_question":
         await send_message(chat_id, "❓ Выберите формат ответа:", [
@@ -1272,6 +1309,97 @@ async def handle_photo(chat_id, user_id, photo_token):
     result = await analyze_photo(photo_bytes, photo_type)
     await send_message(chat_id, result, [[btn("📸 Ещё фото", "photo_menu"), btn("🏠 Меню", "main_menu")]])
 
+# ========== МОЛИТВА ДНЯ И РАССЫЛКА ==========
+async def get_prayer_of_day_max() -> str:
+    today = datetime.now().strftime("%Y-%m-%d")
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT prayer FROM daily_prayer_cache WHERE date=?", (today,))
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return row[0]
+    day_str = date_ru("short")
+    feast = get_todays_feast()
+    saints = get_todays_saints()
+    context = ""
+    if feast:
+        context = f"Сегодня праздник: {feast}."
+    elif saints:
+        context = f"Сегодня память: {', '.join([s[0] for s in saints[:2]])}."
+    prompt = (
+        f"Напиши православную молитву дня. {context} "
+        f"Дата: {day_str}. "
+        "Молитва должна быть тёплой, душевной, 8-15 строк. "
+        "Начни с обращения к Господу или Богородице. Заверши Аминь. "
+        "Пиши только по-русски."
+    )
+    try:
+        msg = claude_client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=600,
+            system="Ты православный священник. Пишешь молитвы тепло и душевно.",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        prayer = msg.content[0].text
+        conn2 = sqlite3.connect(DB_PATH)
+        conn2.execute("INSERT OR REPLACE INTO daily_prayer_cache (date, prayer) VALUES (?,?)", (today, prayer))
+        conn2.commit()
+        conn2.close()
+        return prayer
+    except Exception as e:
+        logging.error(f"Ошибка молитвы дня MAX: {e}")
+        return PRAYER_TEXTS["prayer_morning_ru"][1]
+
+async def morning_broadcast_max():
+    """Утренняя рассылка всем пользователям MAX у кого включены уведомления"""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT user_id, church_name FROM users WHERE notifications=1 OR notifications IS NULL")
+    users = c.fetchall()
+    conn.close()
+    prayer = await get_prayer_of_day_max()
+    day_str = date_ru("short")
+    feast = get_todays_feast()
+    feast_line = ("🎉 " + feast + "\n\n") if feast else ""
+    text = "🌅 Доброе утро, " + day_str + "!\n\n" + feast_line + "☦️ Молитва дня\n\n" + prayer + "\n\n─────────────────\n☦️ Бот → @id232007136009_1_bot"
+    sent = 0
+    for user_id, name in users:
+        try:
+            await max_request("POST", f"messages?chat_id={user_id}", {"text": text})
+            sent += 1
+            await asyncio.sleep(0.1)
+        except Exception:
+            pass
+    logging.info(f"MAX утренняя рассылка: {sent} из {len(users)}")
+
+async def angel_reminder_loop_max():
+    """Напоминания о дне ангела для пользователей MAX"""
+    while True:
+        now = datetime.now()
+        msk_hour = (datetime.utcnow().hour + 3) % 24
+        if msk_hour == 9 and now.minute == 0:
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT user_id, church_name, angel_day FROM users WHERE angel_day != '' AND angel_day IS NOT NULL")
+            users = c.fetchall()
+            conn.close()
+            for user_id, name, angel_day in users:
+                try:
+                    angel_str = angel_day.split(" ")[0]
+                    angel_date = datetime.strptime(angel_str, "%d.%m").replace(year=now.year)
+                    diff = (angel_date.date() - now.date()).days
+                    if diff == 3:
+                        await max_request("POST", f"messages?chat_id={user_id}",
+                            {"text": f"🕊️ Скоро ваш день ангела!\n\nЧерез 3 дня — {angel_day}\n\nПомолитесь своему святому покровителю 🙏"})
+                    elif diff == 0:
+                        await max_request("POST", f"messages?chat_id={user_id}",
+                            {"text": f"🎉 С Днём ангела, {name or 'дорогой'}!\n\n{angel_day}\n\nПусть ваш святой покровитель хранит и молится за вас! ☦️"})
+                except Exception as e:
+                    logging.error(f"Ошибка напоминания MAX {user_id}: {e}")
+            await asyncio.sleep(61)
+        await asyncio.sleep(30)
+
 # ========== АВТОПОСТИНГ В КАНАЛ ==========
 MAX_CHANNEL_ID = -75405929805299
 
@@ -1407,6 +1535,9 @@ async def channel_scheduler():
                     today_key = datetime.now().strftime("%d.%m")
                     icon_url = FEAST_ICONS.get(today_key) if name == "память святого" else None
                     await post_to_channel(text, photo_url=icon_url)
+                    # В 7:00 запускаем утреннюю рассылку пользователям
+                    if hour == 7:
+                        asyncio.create_task(morning_broadcast_max())
                 await asyncio.sleep(60)
 
         await asyncio.sleep(30)
@@ -1419,6 +1550,7 @@ async def startup():
     init_db()
     await register_webhook()
     asyncio.create_task(channel_scheduler())
+    asyncio.create_task(angel_reminder_loop_max())
     logging.info("Vera MAX Bot запущен!")
 
 @app.post("/webhook")
