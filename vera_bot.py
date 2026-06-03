@@ -1752,6 +1752,7 @@ def main_menu():
             InlineKeyboardButton(text="📸 Определить по фото", callback_data="photo_menu"),
             InlineKeyboardButton(text="🗺️ Найти храм рядом",   callback_data="find_church"),
         ],
+        [InlineKeyboardButton(text="📖 Евангелие дня", callback_data="daily_gospel")],
         [
             InlineKeyboardButton(text="👤 Мой профиль",        callback_data="profile"),
             InlineKeyboardButton(text="❓ Задать вопрос",      callback_data="ask_question"),
@@ -1856,8 +1857,9 @@ def holy_places_menu():
 def calendar_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="📅 Сегодня",                callback_data="cal_today")],
+        [InlineKeyboardButton(text="🥗 Пост сегодня",           callback_data="cal_fast_today")],
         [InlineKeyboardButton(text="🎉 Православные праздники", callback_data="cal_feasts")],
-        [InlineKeyboardButton(text="🥗 Посты",                  callback_data="cal_fasts")],
+        [InlineKeyboardButton(text="🥗 Все посты",              callback_data="cal_fasts")],
         [InlineKeyboardButton(text="👼 Именинники сегодня",     callback_data="cal_namedays")],
         [InlineKeyboardButton(text="🔍 Найти именины по имени", callback_data="cal_find_angel")],
         [InlineKeyboardButton(text="🥚 Пасха — всё о главном празднике", callback_data="cal_pasxa")],
@@ -2075,6 +2077,47 @@ async def get_daily_quote() -> str:
         f"─────────────────\n"
         f"☦️ Молитвы и тексты → @Moya\\_Vera\\_bot"
     )
+
+def get_fast_today() -> str:
+    """Возвращает информацию о посте сегодня"""
+    from datetime import date as _date
+    today = _date.today()
+    m, d, w = today.month, today.day, today.weekday()
+
+    # Великий пост 2026: 16 февраля — 4 апреля
+    if (m == 2 and d >= 16) or m == 3 or (m == 4 and d <= 4):
+        if w not in (5, 6):
+            return "*\U0001f56f\ufe0f Великий пост*\n\nСегодня постный день.\n\n❌ Мясо, рыба, молочное, яйца\n✅ Хлеб, овощи, фрукты, бобовые, грибы\n\nВеликий пост — время молитвы и покаяния."
+        return "*\U0001f56f\ufe0f Великий пост*\n\nСуббота/воскресенье — пост послабляется.\n\n✅ Рыба, растительное масло\n❌ Мясо, молочное, яйца"
+
+    # Петров пост 2026: 15 июня — 12 июля
+    if (m == 6 and d >= 15) or (m == 7 and d <= 12):
+        if w in (2, 4):
+            return "*\U0001f56f\ufe0f Петров пост*\n\nСреда/пятница — строгий день.\n\n❌ Мясо, рыба, молочное\n✅ Растительная пища"
+        if w in (5, 6):
+            return "*\U0001f56f\ufe0f Петров пост*\n\nСуббота/воскресенье.\n\n✅ Рыба, вино умеренно\n❌ Мясо, молочное, яйца"
+        return "*\U0001f56f\ufe0f Петров пост*\n\nПн/вт/чт.\n\n✅ Рыба, растительное масло\n❌ Мясо, молочное, яйца"
+
+    # Успенский пост: 14–27 августа
+    if m == 8 and 14 <= d <= 27:
+        if d == 19:
+            return "*\U0001f56f\ufe0f Успенский пост*\n\nСегодня Преображение Господне — разрешается рыба!\n❌ Мясо, молочное, яйца"
+        return "*\U0001f56f\ufe0f Успенский пост*\n\n❌ Мясо, рыба, молочное, яйца\n✅ Растительная пища\n\nПост в честь Успения Богородицы."
+
+    # Рождественский пост: 28 ноября — 6 января
+    if (m == 11 and d >= 28) or m == 12 or (m == 1 and d <= 6):
+        if w in (5, 6):
+            return "*\U0001f56f\ufe0f Рождественский пост*\n\nСуббота/воскресенье.\n\n✅ Рыба, вино умеренно\n❌ Мясо, молочное, яйца"
+        return "*\U0001f56f\ufe0f Рождественский пост*\n\n❌ Мясо, молочное, яйца\n✅ Рыба (пн, вт, чт), растительное масло"
+
+    # Среда и пятница
+    if w == 2:
+        return "*🥗 Среда — постный день*\n\nВ память о предательстве Иуды.\n\n❌ Мясо, молочное, яйца\n✅ Рыба, растительная пища"
+    if w == 4:
+        return "*🥗 Пятница — постный день*\n\nВ память о Распятии Господа.\n\n❌ Мясо, молочное, яйца\n✅ Рыба, растительная пища"
+
+    return "*☀️ Сегодня не постный день*\n\nМногодневных постов сейчас нет. Сегодня не среда и не пятница.\n\nБлижайшие постные дни:\n🥗 Среда и пятница — еженедельно"
+
 
 async def get_daily_gospel() -> str:
     today = date_ru("short")
@@ -2550,6 +2593,35 @@ async def cb_find_angel(callback: CallbackQuery):
     await callback.answer()
 
 # ========== ТАИНСТВА ==========
+@dp.callback_query(F.data == "daily_gospel")
+async def cb_daily_gospel(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer("📖 Нахожу Евангелие дня...")
+    text = await get_daily_gospel()
+    await callback.message.answer(
+        text,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📅 Календарь", callback_data="calendar")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+        ])
+    )
+
+@dp.callback_query(F.data == "cal_fast_today")
+async def cb_fast_today(callback: CallbackQuery):
+    await callback.answer()
+    text = get_fast_today()
+    await callback.message.answer(
+        text,
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🥗 Все посты", callback_data="cal_fasts")],
+            [InlineKeyboardButton(text="📅 Календарь", callback_data="calendar")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+        ])
+    )
+
+
 @dp.callback_query(F.data == "sacraments")
 async def cb_sacraments(callback: CallbackQuery):
     await callback.message.answer(
