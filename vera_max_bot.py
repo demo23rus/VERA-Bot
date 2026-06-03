@@ -1594,18 +1594,83 @@ MAX_CHANNEL_ID = -75405929805299
 
 # Иконы для главных праздников (Wikimedia Commons — свободные изображения)
 FEAST_ICONS = {
+    # Господские праздники
     "07.01": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/Nativity_icon_13th_century_Sinai.jpg/800px-Nativity_icon_13th_century_Sinai.jpg",
-    "19.01": "https://upload.wikimedia.org/wikipedia/commons/thumb/0/0e/Theophany_icon.jpg/800px-Theophany_icon.jpg",
-    "07.04": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/43/Annunciation_icon.jpg/800px-Annunciation_icon.jpg",
+    "19.01": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a5/Theophany_Baptism_of_Christ_Novgorod_icon_12th_century.jpg/800px-Theophany_Baptism_of_Christ_Novgorod_icon_12th_century.jpg",
+    "15.02": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9f/Meeting_of_the_Lord_icon.jpg/800px-Meeting_of_the_Lord_icon.jpg",
+    "07.04": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/21/Annunciation_icon_Andrei_Rublev.jpg/800px-Annunciation_icon_Andrei_Rublev.jpg",
     "19.08": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e5/Transfiguration_by_Feofan_Grek.jpg/800px-Transfiguration_by_Feofan_Grek.jpg",
+    "27.09": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/74/Exaltation_of_the_Cross_icon.jpg/800px-Exaltation_of_the_Cross_icon.jpg",
+    "04.12": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1e/Entry_into_the_Temple.jpg/800px-Entry_into_the_Temple.jpg",
+    # Богородичные праздники
     "28.08": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cf/Dormition_icon.jpg/800px-Dormition_icon.jpg",
+    "21.09": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3e/Nativity_of_Mary_icon.jpg/800px-Nativity_of_Mary_icon.jpg",
     "14.10": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Pokrov_icon.jpg/800px-Pokrov_icon.jpg",
+    "22.08": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Our_Lady_of_Kazan_icon.jpg/800px-Our_Lady_of_Kazan_icon.jpg",
+    "04.11": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Our_Lady_of_Kazan_icon.jpg/800px-Our_Lady_of_Kazan_icon.jpg",
+    "06.03": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f2/Iverskaya_icon.jpg/800px-Iverskaya_icon.jpg",
+    # Святые
     "19.12": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Nicholas_icon.jpg/800px-Nicholas_icon.jpg",
     "22.05": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Nicholas_icon.jpg/800px-Nicholas_icon.jpg",
     "06.05": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8c/George_icon.jpg/800px-George_icon.jpg",
     "02.05": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b0/Matrona_icon.jpg/800px-Matrona_icon.jpg",
     "08.10": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/Sergius_icon.jpg/800px-Sergius_icon.jpg",
+    "01.08": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6e/Seraphim_of_Sarov_icon.jpg/800px-Seraphim_of_Sarov_icon.jpg",
+    "15.01": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6e/Seraphim_of_Sarov_icon.jpg/800px-Seraphim_of_Sarov_icon.jpg",
+    "02.08": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/Elijah_icon.jpg/800px-Elijah_icon.jpg",
+    "12.07": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Peter_and_Paul_icon.jpg/800px-Peter_and_Paul_icon.jpg",
+    "13.07": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Peter_and_Paul_icon.jpg/800px-Peter_and_Paul_icon.jpg",
+    "11.09": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c7/John_the_Baptist_icon.jpg/800px-John_the_Baptist_icon.jpg",
+    "07.07": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c7/John_the_Baptist_icon.jpg/800px-John_the_Baptist_icon.jpg",
+    "17.12": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a9/Barbara_icon.jpg/800px-Barbara_icon.jpg",
+    "31.10": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/59/Luke_icon.jpg/800px-Luke_icon.jpg",
+    "21.11": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/Michael_icon.jpg/800px-Michael_icon.jpg",
+    "08.11": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a0/Demetrius_of_Thessaloniki_icon.jpg/800px-Demetrius_of_Thessaloniki_icon.jpg",
+    "30.09": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/Faith_Hope_Love_icon.jpg/800px-Faith_Hope_Love_icon.jpg",
+    "03.06": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/Sergius_icon.jpg/800px-Sergius_icon.jpg",
+    "04.06": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/Sergius_icon.jpg/800px-Sergius_icon.jpg",
 }
+
+# 31 икона — ротация по числу месяца (каждый день месяца своя икона)
+DAILY_ICONS = {
+    1:  "https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Our_Lady_of_Kazan_icon.jpg/800px-Our_Lady_of_Kazan_icon.jpg",
+    2:  "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Nicholas_icon.jpg/800px-Nicholas_icon.jpg",
+    3:  "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/Michael_icon.jpg/800px-Michael_icon.jpg",
+    4:  "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6e/Seraphim_of_Sarov_icon.jpg/800px-Seraphim_of_Sarov_icon.jpg",
+    5:  "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c7/John_the_Baptist_icon.jpg/800px-John_the_Baptist_icon.jpg",
+    6:  "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/Sergius_icon.jpg/800px-Sergius_icon.jpg",
+    7:  "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8c/George_icon.jpg/800px-George_icon.jpg",
+    8:  "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b0/Matrona_icon.jpg/800px-Matrona_icon.jpg",
+    9:  "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Peter_and_Paul_icon.jpg/800px-Peter_and_Paul_icon.jpg",
+    10: "https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/Elijah_icon.jpg/800px-Elijah_icon.jpg",
+    11: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a0/Demetrius_of_Thessaloniki_icon.jpg/800px-Demetrius_of_Thessaloniki_icon.jpg",
+    12: "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/Nativity_icon_13th_century_Sinai.jpg/800px-Nativity_icon_13th_century_Sinai.jpg",
+    13: "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f2/Iverskaya_icon.jpg/800px-Iverskaya_icon.jpg",
+    14: "https://upload.wikimedia.org/wikipedia/commons/thumb/7/74/Exaltation_of_the_Cross_icon.jpg/800px-Exaltation_of_the_Cross_icon.jpg",
+    15: "https://upload.wikimedia.org/wikipedia/commons/thumb/2/21/Annunciation_icon_Andrei_Rublev.jpg/800px-Annunciation_icon_Andrei_Rublev.jpg",
+    16: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cf/Dormition_icon.jpg/800px-Dormition_icon.jpg",
+    17: "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e5/Transfiguration_by_Feofan_Grek.jpg/800px-Transfiguration_by_Feofan_Grek.jpg",
+    18: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a5/Theophany_Baptism_of_Christ_Novgorod_icon_12th_century.jpg/800px-Theophany_Baptism_of_Christ_Novgorod_icon_12th_century.jpg",
+    19: "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Pokrov_icon.jpg/800px-Pokrov_icon.jpg",
+    20: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Nicholas_icon.jpg/800px-Nicholas_icon.jpg",
+    21: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a9/Barbara_icon.jpg/800px-Barbara_icon.jpg",
+    22: "https://upload.wikimedia.org/wikipedia/commons/thumb/5/59/Luke_icon.jpg/800px-Luke_icon.jpg",
+    23: "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3e/Nativity_of_Mary_icon.jpg/800px-Nativity_of_Mary_icon.jpg",
+    24: "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9f/Meeting_of_the_Lord_icon.jpg/800px-Meeting_of_the_Lord_icon.jpg",
+    25: "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/Faith_Hope_Love_icon.jpg/800px-Faith_Hope_Love_icon.jpg",
+    26: "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/Michael_icon.jpg/800px-Michael_icon.jpg",
+    27: "https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Our_Lady_of_Kazan_icon.jpg/800px-Our_Lady_of_Kazan_icon.jpg",
+    28: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6e/Seraphim_of_Sarov_icon.jpg/800px-Seraphim_of_Sarov_icon.jpg",
+    29: "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/Sergius_icon.jpg/800px-Sergius_icon.jpg",
+    30: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8c/George_icon.jpg/800px-George_icon.jpg",
+    31: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c7/John_the_Baptist_icon.jpg/800px-John_the_Baptist_icon.jpg",
+}
+
+def get_icon_for_today() -> str:
+    """Возвращает икону дня — сначала праздничную, потом по числу месяца"""
+    today_key = datetime.now().strftime("%d.%m")
+    day_num = datetime.now().day
+    return FEAST_ICONS.get(today_key) or DAILY_ICONS.get(day_num, DAILY_ICONS[1])
 
 async def post_to_channel(text, photo_url=None):
     try:
@@ -1664,7 +1729,7 @@ async def channel_scheduler():
     """Автопостинг 6 раз в день по МСК"""
     # МСК часы напрямую
     schedule = [
-        (7,  "утренняя молитва",     f"Напиши короткий пост для православного канала — утренняя молитва или благословение на день. Сегодня {date_ru('short')}. 3-4 предложения. Начни с эмодзи 🌅. Пиши только по-русски."),
+        (7,  "утренняя молитва",     f"Напиши пост для православного канала — утренняя молитва или благословение на день. Сегодня {date_ru('short')}. 4-5 предложений. Начни с эмодзи 🌅. В конце добавь 1-2 строки о том какой сегодня день или иконе дня. Пиши только по-русски."),
         (8,  "цитата святого",       "Напиши короткий пост для православного канала — мудрая цитата православного святого или старца с кратким пояснением. Начни с эмодзи ✝️"),
         (9,  "память святого",       ""),  # генерируется динамически
         (10, "духовное наставление", "Напиши короткий пост для православного канала — краткое духовное наставление или поучение святых отцов. Начни с эмодзи 🕯️"),
@@ -1720,9 +1785,8 @@ async def channel_scheduler():
                     text = await generate_channel_post(prompt)
 
                 if text:
-                    # Добавляем иконку если есть для этого дня
-                    today_key = datetime.now().strftime("%d.%m")
-                    icon_url = FEAST_ICONS.get(today_key) if name == "память святого" else None
+                    # Икона дня — праздничная или по числу месяца
+                    icon_url = get_icon_for_today() if name != "история святого" else None
                     await post_to_channel(text, photo_url=icon_url)
                     # В 7:00 запускаем утреннюю рассылку пользователям
                     if hour == 7:
