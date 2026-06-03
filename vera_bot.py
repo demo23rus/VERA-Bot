@@ -1875,6 +1875,7 @@ def back_section(section):
 def prayers_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="✨ Молитва дня", callback_data="prayer_of_day")],
+        [InlineKeyboardButton(text="🙏 Молитва за меня", callback_data="prayer_for_me")],
         [
             InlineKeyboardButton(text="🌅 Утренняя (рус)",    callback_data="prayer_morning_ru"),
             InlineKeyboardButton(text="🌅 Утренняя (цс)",     callback_data="prayer_morning_cs"),
@@ -1926,6 +1927,7 @@ def sacraments_menu():
         ],
         [
             InlineKeyboardButton(text="📝 Как подавать записки", callback_data="sacr_zapiska"),
+            InlineKeyboardButton(text="✍️ Составить записку", callback_data="make_zapiska"),
             InlineKeyboardButton(text="⛪ Как вести себя в храме", callback_data="sacr_v_hrame"),
         ],
         [InlineKeyboardButton(text="◀️ Главное меню", callback_data="main_menu")],
@@ -2713,6 +2715,62 @@ async def cb_fast_today(callback: CallbackQuery):
         ])
     )
 
+
+@dp.callback_query(F.data == "prayer_for_me")
+async def cb_prayer_for_me(callback: CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    set_step(user_id, "prayer_for_me_name")
+    await callback.message.answer(
+        "🙏 *Молитва за меня*\n\n"
+        "Напишите ваше имя (церковное) и просьбу к Богу.\n\n"
+        "Например: *Александр, прошу о здравии и помощи в трудном деле*\n\n"
+        "Или просто: *помощь в работе*, *здоровье семьи*, *мир в душе*",
+        parse_mode="Markdown",
+        reply_markup=back_menu()
+    )
+
+@dp.callback_query(F.data == "make_zapiska")
+async def cb_make_zapiska(callback: CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    set_step(user_id, "zapiska_type")
+    await callback.message.answer(
+        "✍️ *Составить записку в храм*\n\n"
+        "Какая записка нужна?",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="💛 О здравии", callback_data="zapiska_zdravie")],
+            [InlineKeyboardButton(text="🕯️ Об упокоении", callback_data="zapiska_upokoenie")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="sacraments")],
+        ])
+    )
+
+@dp.callback_query(F.data.startswith("zapiska_"))
+async def cb_zapiska_type(callback: CallbackQuery):
+    await callback.answer()
+    user_id = callback.from_user.id
+    ztype = callback.data.replace("zapiska_", "")
+    if ztype == "zdravie":
+        set_step(user_id, "zapiska_zdravie_names")
+        await callback.message.answer(
+            "💛 *Записка о здравии*\n\n"
+            "Введите имена через запятую.\n"
+            "Только крещёные православные имена.\n\n"
+            "Пример: *Александр, Мария, Иоанн*",
+            parse_mode="Markdown",
+            reply_markup=back_menu()
+        )
+    elif ztype == "upokoenie":
+        set_step(user_id, "zapiska_upokoenie_names")
+        await callback.message.answer(
+            "🕯️ *Записка об упокоении*\n\n"
+            "Введите имена через запятую.\n"
+            "Только крещёные православные имена.\n\n"
+            "Пример: *Николай, Татиана, Василий*",
+            parse_mode="Markdown",
+            reply_markup=back_menu()
+        )
 
 @dp.callback_query(F.data == "sacraments")
 async def cb_sacraments(callback: CallbackQuery):
@@ -3874,6 +3932,82 @@ async def handle_text(message: Message):
         return
 
     # Отзыв
+    if step == "prayer_for_me_name":
+        set_step(user_id, "idle")
+        await message.answer("🙏 Молюсь... составляю молитву...")
+        try:
+            msg = claude_client.messages.create(
+                model="claude-sonnet-4-5",
+                max_tokens=600,
+                system=(
+                    "Ты православный священник. Составь личную молитву для человека "
+                    "на основе его имени и просьбы. Молитва должна быть тёплой, искренней, "
+                    "3-5 строф. Обращайся к Господу или Богородице. Упомяни имя человека. "
+                    "Заверши Аминь. Только по-русски."
+                ),
+                messages=[{"role": "user", "content": f"Составь молитву для: {text}"}]
+            )
+            prayer_text = msg.content[0].text
+            await message.answer(
+                f"🙏 *Молитва за тебя*\n\n{prayer_text}",
+                parse_mode="Markdown",
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                    [InlineKeyboardButton(text="🙏 Ещё молитву", callback_data="prayer_for_me")],
+                    [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+                ])
+            )
+        except Exception as e:
+            logging.error(f"Ошибка молитвы за меня: {e}")
+            await message.answer("⚠️ Не удалось составить молитву. Попробуйте позже.", reply_markup=back_menu())
+        return
+
+    if step == "zapiska_zdravie_names":
+        set_step(user_id, "idle")
+        names = [n.strip() for n in text.replace("\n", ",").split(",") if n.strip()]
+        if not names:
+            await message.answer("⚠️ Введите хотя бы одно имя.", reply_markup=back_menu())
+            return
+        zapiska = "О ЗДРАВИИ\n\n"
+        for n in names[:10]:
+            zapiska += f"{n}\n"
+        await message.answer(
+            f"💛 *Ваша записка о здравии:*\n\n"
+            f"```\n{zapiska}```\n\n"
+            f"📋 Распечатайте или перепишите от руки.\n"
+            f"Подайте в свечной лавке храма.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✍️ Ещё записку", callback_data="make_zapiska")],
+                [InlineKeyboardButton(text="📝 Как подавать записки", callback_data="sacr_zapiska")],
+                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+            ])
+        )
+        return
+
+    if step == "zapiska_upokoenie_names":
+        set_step(user_id, "idle")
+        names = [n.strip() for n in text.replace("\n", ",").split(",") if n.strip()]
+        if not names:
+            await message.answer("⚠️ Введите хотя бы одно имя.", reply_markup=back_menu())
+            return
+        zapiska = "ОБ УПОКОЕНИИ\n\n"
+        for n in names[:10]:
+            zapiska += f"{n}\n"
+        await message.answer(
+            f"🕯️ *Ваша записка об упокоении:*\n\n"
+            f"```\n{zapiska}```\n\n"
+            f"📋 Распечатайте или перепишите от руки.\n"
+            f"Подайте в свечной лавке храма.\n\n"
+            f"*Сорокоуст* — закажите отдельно если усопший недавно.",
+            parse_mode="Markdown",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✍️ Ещё записку", callback_data="make_zapiska")],
+                [InlineKeyboardButton(text="📝 Как подавать записки", callback_data="sacr_zapiska")],
+                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+            ])
+        )
+        return
+
     if step == "review":
         asyncio.create_task(asyncio.to_thread(
             add_review_to_sheet,
