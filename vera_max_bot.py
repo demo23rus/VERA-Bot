@@ -223,6 +223,7 @@ def main_menu_buttons():
         [btn("⛪ Таинства и обряды", "sacraments"), btn("👼 Святые", "saints")],
         [btn("🏛️ Святые места", "holy_places"), btn("📚 Библиотека", "library")],
         [btn("📸 Определить по фото", "photo_menu"), btn("🗺️ Найти храм рядом", "find_church")],
+        [btn("📖 Евангелие дня", "daily_gospel")],
         [btn("👤 Мой профиль", "profile"), btn("❓ Задать вопрос", "ask_question")],
         [btn("🕯️ Пожертвование на развитие", "donate")],
         [btn("💬 Отзыв или пожелание", "review")],
@@ -271,8 +272,9 @@ def holy_places_buttons():
 def calendar_buttons():
     return [
         [btn("📅 Сегодня", "cal_today")],
+        [btn("🥗 Пост сегодня", "cal_fast_today")],
         [btn("🎉 Православные праздники", "cal_feasts")],
-        [btn("🥗 Посты", "cal_fasts")],
+        [btn("🥗 Все посты", "cal_fasts")],
         [btn("👼 Именинники сегодня", "cal_namedays")],
         [btn("🔍 Найти именины по имени", "cal_find_angel")],
         [btn("🥚 Пасха — всё о главном празднике", "cal_pasxa")],
@@ -1235,6 +1237,20 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
         status = "включены ✅" if new_val else "отключены 🔕"
         await send_message(chat_id, f"Утренние уведомления {status}", back_main())
 
+    elif payload == "daily_gospel":
+        await send_message(chat_id, "📖 Нахожу Евангелие дня...")
+        text = await get_daily_gospel_max()
+        await send_message(chat_id, text, [
+            [btn("📅 Календарь", "calendar"), btn("🏠 Меню", "main_menu")]
+        ])
+
+    elif payload == "cal_fast_today":
+        text = get_fast_today_max()
+        await send_message(chat_id, text, [
+            [btn("🥗 Все посты", "cal_fasts")],
+            [btn("📅 Календарь", "calendar"), btn("🏠 Меню", "main_menu")]
+        ])
+
     elif payload == "ask_question":
         await send_message(chat_id, "❓ Выберите формат ответа:", [
             [btn("💬 Кратко", "q_short"), btn("📖 Развёрнуто", "q_medium"), btn("🔍 Глубоко", "q_deep")],
@@ -1438,6 +1454,49 @@ async def handle_photo(chat_id, user_id, photo_token):
         return
     result = await analyze_photo(photo_bytes, photo_type)
     await send_message(chat_id, result, [[btn("📸 Ещё фото", "photo_menu"), btn("🏠 Меню", "main_menu")]])
+
+# ========== ЕВАНГЕЛИЕ И ПОСТ ДНЯ ==========
+def get_fast_today_max() -> str:
+    from datetime import date as _date
+    today = _date.today()
+    m, d, w = today.month, today.day, today.weekday()
+    if (m == 2 and d >= 16) or m == 3 or (m == 4 and d <= 4):
+        if w not in (5, 6):
+            return "🕯️ Великий пост\n\nСегодня постный день.\n❌ Мясо, рыба, молочное, яйца\n✅ Хлеб, овощи, фрукты, бобовые, грибы\n\nВеликий пост — время молитвы и покаяния."
+        return "🕯️ Великий пост\n\nСуббота/воскресенье — пост послабляется.\n✅ Рыба, растительное масло\n❌ Мясо, молочное, яйца"
+    if (m == 6 and d >= 15) or (m == 7 and d <= 12):
+        if w in (2, 4):
+            return "🕯️ Петров пост\n\nСреда/пятница — строгий день.\n❌ Мясо, рыба, молочное\n✅ Растительная пища"
+        if w in (5, 6):
+            return "🕯️ Петров пост\n\nСуббота/воскресенье.\n✅ Рыба, вино умеренно\n❌ Мясо, молочное, яйца"
+        return "🕯️ Петров пост\n\n✅ Рыба, растительное масло\n❌ Мясо, молочное, яйца"
+    if m == 8 and 14 <= d <= 27:
+        if d == 19:
+            return "🕯️ Успенский пост\n\nСегодня Преображение Господне — разрешается рыба!\n❌ Мясо, молочное, яйца"
+        return "🕯️ Успенский пост\n\n❌ Мясо, рыба, молочное, яйца\n✅ Растительная пища"
+    if (m == 11 and d >= 28) or m == 12 or (m == 1 and d <= 6):
+        if w in (5, 6):
+            return "🕯️ Рождественский пост\n\nСуббота/воскресенье.\n✅ Рыба, вино умеренно\n❌ Мясо, молочное, яйца"
+        return "🕯️ Рождественский пост\n\n❌ Мясо, молочное, яйца\n✅ Рыба (пн, вт, чт), растительное масло"
+    if w == 2:
+        return "🥗 Среда — постный день\n\nВ память о предательстве Иуды.\n❌ Мясо, молочное, яйца\n✅ Рыба, растительная пища"
+    if w == 4:
+        return "🥗 Пятница — постный день\n\nВ память о Распятии Господа.\n❌ Мясо, молочное, яйца\n✅ Рыба, растительная пища"
+    return "☀️ Сегодня не постный день\n\nМногодневных постов сейчас нет. Сегодня не среда и не пятница.\n\nБлижайшие постные дни: среда и пятница."
+
+async def get_daily_gospel_max() -> str:
+    today = date_ru("short")
+    try:
+        msg = claude_client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=500,
+            system="Ты православный священник. Дай евангельское чтение дня с коротким толкованием (3-4 предложения). Формат: отрывок из Евангелия (2-3 стиха с указанием источника), потом краткое толкование простым языком. Отвечай по-русски. Без лишних вступлений.",
+            messages=[{"role": "user", "content": f"Дай евангельское чтение на {today}"}]
+        )
+        return "📖 Евангелие дня — " + today + "\n\n" + msg.content[0].text
+    except Exception as e:
+        logging.error(f"Ошибка Евангелия MAX: {e}")
+        return "📖 Евангелие дня\n\n«Просите — и дано будет вам; ищите — и найдёте; стучите — и отворят вам.»\n(Мф. 7:7)"
 
 # ========== МОЛИТВА ДНЯ И РАССЫЛКА ==========
 async def get_prayer_of_day_max() -> str:
