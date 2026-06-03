@@ -1777,7 +1777,7 @@ async def webhook(request: Request):
             # В MAX chat_id находится в message.recipient.chat_id
             message = data.get("message", {})
             recipient = message.get("recipient", {})
-            chat_id = (
+            raw_chat_id = (
                 cb.get("chat_id") or
                 recipient.get("chat_id") or
                 message.get("sender", {}).get("chat_id") or
@@ -1787,8 +1787,14 @@ async def webhook(request: Request):
             user_id = user.get("user_id", 0)
             first_name = user.get("name", "")
             payload = cb.get("payload", "")
+            # Если callback пришёл из канала — отвечаем в личку пользователю
+            chat_type = message.get("chat_type", "")
+            if chat_type == "channel" or (raw_chat_id and str(raw_chat_id).startswith("-")):
+                chat_id = user_id
+                logging.info(f"CALLBACK из канала — перенаправляем в личку: user_id={user_id}")
+            else:
+                chat_id = raw_chat_id
             logging.info(f"CALLBACK: chat_id={chat_id} user_id={user_id} payload={payload}")
-            logging.info(f"CALLBACK DATA: {data}")
             if payload and chat_id:
                 await handle_callback(chat_id, user_id, payload, first_name)
             elif payload and not chat_id:
