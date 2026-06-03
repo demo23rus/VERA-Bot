@@ -52,6 +52,79 @@ _env = load_env()
 # ========== КОНФИГ ==========
 BOT_TOKEN         = "8830150213:AAFcyR-_mnSpdWnlCngaArSKXA_bp-YLTnY"
 CHANNEL_ID        = "@SvyatoyPut"
+
+# 31 икона — ротация по числу месяца
+DAILY_ICONS_TG = {
+    1:  "https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Our_Lady_of_Kazan_icon.jpg/800px-Our_Lady_of_Kazan_icon.jpg",
+    2:  "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Nicholas_icon.jpg/800px-Nicholas_icon.jpg",
+    3:  "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/Michael_icon.jpg/800px-Michael_icon.jpg",
+    4:  "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6e/Seraphim_of_Sarov_icon.jpg/800px-Seraphim_of_Sarov_icon.jpg",
+    5:  "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c7/John_the_Baptist_icon.jpg/800px-John_the_Baptist_icon.jpg",
+    6:  "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/Sergius_icon.jpg/800px-Sergius_icon.jpg",
+    7:  "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8c/George_icon.jpg/800px-George_icon.jpg",
+    8:  "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b0/Matrona_icon.jpg/800px-Matrona_icon.jpg",
+    9:  "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Peter_and_Paul_icon.jpg/800px-Peter_and_Paul_icon.jpg",
+    10: "https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/Elijah_icon.jpg/800px-Elijah_icon.jpg",
+    11: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a0/Demetrius_of_Thessaloniki_icon.jpg/800px-Demetrius_of_Thessaloniki_icon.jpg",
+    12: "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/Nativity_icon_13th_century_Sinai.jpg/800px-Nativity_icon_13th_century_Sinai.jpg",
+    13: "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f2/Iverskaya_icon.jpg/800px-Iverskaya_icon.jpg",
+    14: "https://upload.wikimedia.org/wikipedia/commons/thumb/7/74/Exaltation_of_the_Cross_icon.jpg/800px-Exaltation_of_the_Cross_icon.jpg",
+    15: "https://upload.wikimedia.org/wikipedia/commons/thumb/2/21/Annunciation_icon_Andrei_Rublev.jpg/800px-Annunciation_icon_Andrei_Rublev.jpg",
+    16: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cf/Dormition_icon.jpg/800px-Dormition_icon.jpg",
+    17: "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e5/Transfiguration_by_Feofan_Grek.jpg/800px-Transfiguration_by_Feofan_Grek.jpg",
+    18: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a5/Theophany_Baptism_of_Christ_Novgorod_icon_12th_century.jpg/800px-Theophany_Baptism_of_Christ_Novgorod_icon_12th_century.jpg",
+    19: "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Pokrov_icon.jpg/800px-Pokrov_icon.jpg",
+    20: "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Nicholas_icon.jpg/800px-Nicholas_icon.jpg",
+    21: "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a9/Barbara_icon.jpg/800px-Barbara_icon.jpg",
+    22: "https://upload.wikimedia.org/wikipedia/commons/thumb/5/59/Luke_icon.jpg/800px-Luke_icon.jpg",
+    23: "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3e/Nativity_of_Mary_icon.jpg/800px-Nativity_of_Mary_icon.jpg",
+    24: "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9f/Meeting_of_the_Lord_icon.jpg/800px-Meeting_of_the_Lord_icon.jpg",
+    25: "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/Faith_Hope_Love_icon.jpg/800px-Faith_Hope_Love_icon.jpg",
+    26: "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/Michael_icon.jpg/800px-Michael_icon.jpg",
+    27: "https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Our_Lady_of_Kazan_icon.jpg/800px-Our_Lady_of_Kazan_icon.jpg",
+    28: "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6e/Seraphim_of_Sarov_icon.jpg/800px-Seraphim_of_Sarov_icon.jpg",
+    29: "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/Sergius_icon.jpg/800px-Sergius_icon.jpg",
+    30: "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8c/George_icon.jpg/800px-George_icon.jpg",
+    31: "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c7/John_the_Baptist_icon.jpg/800px-John_the_Baptist_icon.jpg",
+}
+
+FEAST_ICONS_TG = {
+    "07.01": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/5b/Nativity_icon_13th_century_Sinai.jpg/800px-Nativity_icon_13th_century_Sinai.jpg",
+    "19.01": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a5/Theophany_Baptism_of_Christ_Novgorod_icon_12th_century.jpg/800px-Theophany_Baptism_of_Christ_Novgorod_icon_12th_century.jpg",
+    "15.02": "https://upload.wikimedia.org/wikipedia/commons/thumb/9/9f/Meeting_of_the_Lord_icon.jpg/800px-Meeting_of_the_Lord_icon.jpg",
+    "07.04": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/21/Annunciation_icon_Andrei_Rublev.jpg/800px-Annunciation_icon_Andrei_Rublev.jpg",
+    "19.08": "https://upload.wikimedia.org/wikipedia/commons/thumb/e/e5/Transfiguration_by_Feofan_Grek.jpg/800px-Transfiguration_by_Feofan_Grek.jpg",
+    "28.08": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cf/Dormition_icon.jpg/800px-Dormition_icon.jpg",
+    "14.10": "https://upload.wikimedia.org/wikipedia/commons/thumb/2/2b/Pokrov_icon.jpg/800px-Pokrov_icon.jpg",
+    "19.12": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Nicholas_icon.jpg/800px-Nicholas_icon.jpg",
+    "22.05": "https://upload.wikimedia.org/wikipedia/commons/thumb/4/4b/Nicholas_icon.jpg/800px-Nicholas_icon.jpg",
+    "06.05": "https://upload.wikimedia.org/wikipedia/commons/thumb/8/8c/George_icon.jpg/800px-George_icon.jpg",
+    "02.05": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b0/Matrona_icon.jpg/800px-Matrona_icon.jpg",
+    "08.10": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/Sergius_icon.jpg/800px-Sergius_icon.jpg",
+}
+
+def get_channel_icon() -> str:
+    """Возвращает икону для поста канала — праздничную или по числу месяца"""
+    today_key = datetime.now().strftime("%d.%m")
+    day_num = datetime.now().day
+    return FEAST_ICONS_TG.get(today_key) or DAILY_ICONS_TG.get(day_num, DAILY_ICONS_TG[1])
+
+async def send_channel_post(text: str, with_photo: bool = True):
+    """Отправляет пост в канал с фото или без"""
+    if with_photo:
+        icon_url = get_channel_icon()
+        try:
+            await bot.send_photo(
+                CHANNEL_ID,
+                photo=icon_url,
+                caption=text,
+                parse_mode="Markdown"
+            )
+            return
+        except Exception as e:
+            logging.error(f"Ошибка отправки фото в канал: {e}")
+    # Fallback — без фото
+    await bot.send_message(CHANNEL_ID, text, parse_mode="Markdown")
 OPENAI_KEY        = _env.get("OPENAI_KEY") or os.environ.get("OPENAI_KEY", "")
 ANTHROPIC_KEY     = _env.get("ANTHROPIC_KEY") or os.environ.get("ANTHROPIC_KEY", "")
 OWNER_ID          = 549639607
@@ -2196,20 +2269,18 @@ async def channel_post_loop():
             # 07:00 — Утренняя молитва
             if hour == 7 and minute == 0:
                 prayer = PRAYERS["morning_ru"]
-                await bot.send_message(
-                    CHANNEL_ID,
+                await send_channel_post(
                     f"🌅 *Доброе утро, {today_str}!*\n\n"
                     f"☦️ *Утренняя молитва*\n\n"
                     f"{prayer['text']}\n\n"
                     f"─────────────────\n"
-                    f"🙏 Все молитвы → @Moya\\_Vera\\_bot",
-                    parse_mode="Markdown"
+                    f"🙏 Все молитвы → @Moya\_Vera\_bot"
                 )
 
             # 08:00 — Святой дня + краткое житие
             elif hour == 8 and minute == 0:
                 text = await get_daily_saint()
-                await bot.send_message(CHANNEL_ID, text, parse_mode="Markdown")
+                await send_channel_post(text)
 
             # 09:00 — Именинники (только если есть)
             elif hour == 9 and minute == 0:
@@ -2221,29 +2292,27 @@ async def channel_post_loop():
                     text += f"\n🎉 Поздравьте своих близких!\n\n"
                     text += f"─────────────────\n"
                     text += f"☦️ День ангела → @Moya\\_Vera\\_bot"
-                    await bot.send_message(CHANNEL_ID, text, parse_mode="Markdown")
+                    await send_channel_post(text)
 
             # 10:00 — Евангелие дня
             elif hour == 10 and minute == 0:
                 text = await get_daily_gospel()
-                await bot.send_message(CHANNEL_ID, text, parse_mode="Markdown")
+                await send_channel_post(text)
 
             # 12:00 — Цитата святых отцов
             elif hour == 12 and minute == 0:
                 text = await get_daily_quote()
-                await bot.send_message(CHANNEL_ID, text, parse_mode="Markdown")
+                await send_channel_post(text)
 
             # 20:00 — Вечерняя молитва
             elif hour == 20 and minute == 0:
                 prayer = PRAYERS["evening_ru"]
-                await bot.send_message(
-                    CHANNEL_ID,
+                await send_channel_post(
                     f"🌙 *Добрый вечер, {today_str}!*\n\n"
                     f"☦️ *Вечерняя молитва*\n\n"
                     f"{prayer['text']}\n\n"
                     f"─────────────────\n"
-                    f"🙏 Молитвослов → @Moya\\_Vera\\_bot",
-                    parse_mode="Markdown"
+                    f"🙏 Молитвослов → @Moya\_Vera\_bot"
                 )
 
         except Exception as e:
