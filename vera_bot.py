@@ -245,7 +245,7 @@ def get_sheet():
             sheet = sp.worksheet("ВераБот")
         except Exception:
             sheet = sp.add_worksheet(title="ВераБот", rows=1000, cols=10)
-            sheet.insert_row(["ID","Username","Имя","Церковное имя","Дата рождения","День ангела","Тариф","Дата регистрации","Запросов AI","Последняя активность"], 1)
+            sheet.insert_row(["ID","Username","Имя","Церковное имя","Дата рождения","День ангела","Тариф","Дата регистрации","Запросов AI","Последняя активность","Отзывов","Пожертвований"], 1)
         return sheet
     except Exception as e:
         logging.error(f"Google Sheets ошибка: {e}")
@@ -266,7 +266,9 @@ def sheets_add_user(user_id, username, first_name):
             "—", "—", "—", "Бесплатный",
             datetime.now().strftime("%d.%m.%Y %H:%M"),
             "0",
-            datetime.now().strftime("%d.%m.%Y %H:%M")
+            datetime.now().strftime("%d.%m.%Y %H:%M"),
+            "0",
+            "0"
         ])
     except Exception as e:
         logging.error(f"Sheets add_user: {e}")
@@ -1708,6 +1710,16 @@ def add_donation_to_sheet(user_id, username, first_name, amount):
             datetime.now().strftime("%d.%m.%Y %H:%M"),
             "Telegram"
         ])
+        # Обновляем счётчик пожертвований в листе ВераБот
+        try:
+            main_sheet = sp.worksheet("ВераБот")
+            col = main_sheet.col_values(1)
+            if str(user_id) in col:
+                row = col.index(str(user_id)) + 1
+                val = main_sheet.cell(row, 12).value or "0"
+                main_sheet.update_cell(row, 12, str(int(val) + 1))
+        except Exception:
+            pass
     except Exception as e:
         logging.error(f"Sheets add_donation: {e}")
 
@@ -1717,6 +1729,7 @@ def add_review_to_sheet(user_id, username, first_name, text):
         creds  = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
         client = gspread.authorize(creds)
         sp     = client.open_by_key(SPREADSHEET_ID)
+        # Записываем в лист отзывов
         try:
             sheet = sp.worksheet("Отзывы ВераБот")
         except Exception:
@@ -1730,6 +1743,16 @@ def add_review_to_sheet(user_id, username, first_name, text):
             "Отзыв/пожелание",
             text
         ])
+        # Обновляем счётчик отзывов в листе ВераБот
+        try:
+            main_sheet = sp.worksheet("ВераБот")
+            col = main_sheet.col_values(1)
+            if str(user_id) in col:
+                row = col.index(str(user_id)) + 1
+                val = main_sheet.cell(row, 11).value or "0"
+                main_sheet.update_cell(row, 11, str(int(val) + 1))
+        except Exception:
+            pass
     except Exception as e:
         logging.error(f"Ошибка записи отзыва: {e}")
 
