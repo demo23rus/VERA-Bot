@@ -1492,7 +1492,7 @@ async def morning_broadcast_max():
     day_str = date_ru("short")
     feast = get_todays_feast()
     feast_line = ("🎉 " + feast + "\n\n") if feast else ""
-    text = "🌅 Доброе утро, " + day_str + "!\n\n" + feast_line + "☦️ Молитва дня\n\n" + prayer + "\n\n─────────────────\n☦️ Бот → @id232007136009_1_bot"
+    text = "🌅 Доброе утро, " + day_str + "!\n\n" + feast_line + "☦️ Молитва дня\n\n" + prayer + "\n\n─────────────────\n☦️ Православный помощник → @id232007136009_1_bot"
     sent = 0
     for user_id, name in users:
         try:
@@ -1595,7 +1595,7 @@ async def generate_channel_post(prompt):
         )
         text = msg.content[0].text
         # Добавляем ссылку на бота в конец каждого поста
-        text += "\n\n☦️ Бот → @id232007136009_1_bot"
+        text += "\n\n☦️ Православный помощник → @id232007136009_1_bot"
         return text
     except Exception as e:
         logging.error(f"Ошибка генерации поста: {e}")
