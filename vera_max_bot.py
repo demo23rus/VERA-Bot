@@ -235,6 +235,7 @@ def back_main():
 def prayers_buttons():
     return [
         [btn("✨ Молитва дня", "prayer_of_day")],
+        [btn("🙏 Молитва за меня", "prayer_for_me")],
         [btn("🌅 Утренняя (рус)", "prayer_morning_ru"), btn("🌅 Утренняя (цс)", "prayer_morning_cs")],
         [btn("🌙 Вечерняя (рус)", "prayer_evening_ru"), btn("🌙 Вечерняя (цс)", "prayer_evening_cs")],
         [btn("🍽️ Перед едой", "prayer_before_meal"), btn("✝️ Символ веры", "prayer_symbol")],
@@ -253,6 +254,7 @@ def sacraments_buttons():
         [btn("🕯️ Отпевание", "sacr_otpevanie"), btn("🫒 Соборование", "sacr_sobor")],
         [btn("🏠 Освящение", "sacr_osvyashchenie"), btn("🕯️ Как ставить свечи", "sacr_svecha")],
         [btn("📝 Как подавать записки", "sacr_zapiska"), btn("⛪ Как вести себя", "sacr_v_hrame")],
+        [btn("✍️ Составить записку", "make_zapiska")],
         [btn("◀️ Главное меню", "main_menu")],
     ]
 
@@ -1251,6 +1253,49 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
             [btn("📅 Календарь", "calendar"), btn("🏠 Меню", "main_menu")]
         ])
 
+    elif payload == "prayer_for_me":
+        set_step(user_id, "prayer_for_me_name")
+        await send_message(chat_id,
+            "🙏 Молитва за меня\n\n"
+            "Напишите ваше имя и просьбу к Богу.\n\n"
+            "Например: Александр, прошу о здравии и помощи\n"
+            "Или просто: здоровье семьи, мир в душе",
+            back_main()
+        )
+
+    elif payload == "make_zapiska":
+        set_step(user_id, "zapiska_type")
+        await send_message(chat_id,
+            "✍️ Составить записку в храм\n\nКакая записка нужна?",
+            [[btn("💛 О здравии", "zapiska_zdravie")],
+             [btn("🕯️ Об упокоении", "zapiska_upokoenie")],
+             back_main()[0]]
+        )
+
+    elif payload == "zapiska_zdravie":
+        set_step(user_id, "zapiska_zdravie_names")
+        await send_message(chat_id,
+            "💛 Записка о здравии\n\n"
+            "Введите имена через запятую.\n\n"
+            "Пишите как знаете — привычное или полное имя.\n"
+            "Если не знаете крещёного имени — ничего страшного,\n"
+            "в храме помогут разобраться.\n\n"
+            "Пример: Саша, Мария, Дед Николай",
+            back_main()
+        )
+
+    elif payload == "zapiska_upokoenie":
+        set_step(user_id, "zapiska_upokoenie_names")
+        await send_message(chat_id,
+            "🕯️ Записка об упокоении\n\n"
+            "Введите имена через запятую.\n\n"
+            "Пишите как знаете — привычное или полное имя.\n"
+            "Если не знаете крещёного имени — ничего страшного,\n"
+            "в храме помогут.\n\n"
+            "Пример: Бабушка Нина, Николай, дед Василий",
+            back_main()
+        )
+
     elif payload == "ask_question":
         await send_message(chat_id, "❓ Выберите формат ответа:", [
             [btn("💬 Кратко", "q_short"), btn("📖 Развёрнуто", "q_medium"), btn("🔍 Глубоко", "q_deep")],
@@ -1352,6 +1397,61 @@ async def handle_text(chat_id, user_id, text, first_name=""):
         maps_url = f"https://maps.yandex.ru/?text=православный+храм+{city}"
         set_step(user_id, "idle")
         await send_message(chat_id, f"🗺️ Православные храмы в городе {city}:\n\n{maps_url}", back_main())
+        return
+
+    if step == "prayer_for_me_name":
+        set_step(user_id, "idle")
+        await send_message(chat_id, "🙏 Молюсь... составляю молитву...")
+        try:
+            msg = claude_client.messages.create(
+                model="claude-sonnet-4-5",
+                max_tokens=600,
+                system=(
+                    "Ты православный священник. Составь личную молитву для человека "
+                    "на основе его имени и просьбы. Молитва тёплая, искренняя, 3-5 строф. "
+                    "Обращайся к Господу или Богородице. Упомяни имя. Заверши Аминь. По-русски."
+                ),
+                messages=[{"role": "user", "content": f"Составь молитву для: {text}"}]
+            )
+            prayer_text = msg.content[0].text
+            await send_message(chat_id,
+                "🙏 Молитва за тебя\n\n" + prayer_text,
+                [[btn("🙏 Ещё молитву", "prayer_for_me"), btn("🏠 Меню", "main_menu")]]
+            )
+        except Exception as e:
+            logging.error(f"Ошибка молитвы за меня MAX: {e}")
+            await send_message(chat_id, "⚠️ Не удалось составить молитву. Попробуйте позже.", back_main())
+        return
+
+    if step == "zapiska_zdravie_names":
+        set_step(user_id, "idle")
+        names = [n.strip() for n in text.replace("\n", ",").split(",") if n.strip()]
+        if not names:
+            await send_message(chat_id, "⚠️ Введите хотя бы одно имя.", back_main())
+            return
+        zapiska = "О ЗДРАВИИ\n\n" + "\n".join(names[:10])
+        await send_message(chat_id,
+            "💛 Ваша записка о здравии:\n\n" + zapiska + "\n\n"
+            "Перепишите от руки и подайте в свечной лавке.",
+            [[btn("✍️ Ещё записку", "make_zapiska")],
+             [btn("📝 Как подавать", "sacr_zapiska"), btn("🏠 Меню", "main_menu")]]
+        )
+        return
+
+    if step == "zapiska_upokoenie_names":
+        set_step(user_id, "idle")
+        names = [n.strip() for n in text.replace("\n", ",").split(",") if n.strip()]
+        if not names:
+            await send_message(chat_id, "⚠️ Введите хотя бы одно имя.", back_main())
+            return
+        zapiska = "ОБ УПОКОЕНИИ\n\n" + "\n".join(names[:10])
+        await send_message(chat_id,
+            "🕯️ Ваша записка об упокоении:\n\n" + zapiska + "\n\n"
+            "Перепишите от руки и подайте в свечной лавке.\n"
+            "Сорокоуст закажите отдельно если усопший недавно.",
+            [[btn("✍️ Ещё записку", "make_zapiska")],
+             [btn("📝 Как подавать", "sacr_zapiska"), btn("🏠 Меню", "main_menu")]]
+        )
         return
 
     if step == "review":
