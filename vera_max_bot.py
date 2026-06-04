@@ -1775,35 +1775,42 @@ def get_icon_for_today() -> str:
 async def post_to_channel(text, photo_url=None):
     try:
         if photo_url:
-            # Сначала загружаем фото в MAX
-            headers = {"Authorization": MAX_TOKEN}
             async with httpx.AsyncClient(timeout=30) as client:
-                # Скачиваем фото
-                r = await client.get(photo_url)
-                if r.status_code == 200:
-                    # Загружаем в MAX как фото
-                    files_data = {"data": r.content}
-                    upload = await client.post(
-                        f"{MAX_API}/uploads?type=photo",
-                        content=r.content,
-                        headers={"Authorization": MAX_TOKEN, "Content-Type": "image/jpeg"}
-                    )
-                    upload_data = upload.json()
-                    token = upload_data.get("token") or upload_data.get("photos", [{}])[0].get("token", "")
-                    if token:
-                        payload = {
-                            "text": text,
-                            "attachments": [{"type": "image", "payload": {"token": token}}]
-                        }
-                        result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload)
-                        logging.info(f"Канал: пост с фото отправлен")
-                        return
-        # Без фото — просто текст
+                # Шаг 1: Получаем URL для загрузки (type=image)
+                meta = await client.post(
+                    f"{MAX_API}/uploads?type=image",
+                    headers={"Authorization": MAX_TOKEN}
+                )
+                meta_data = meta.json()
+                upload_url = meta_data.get("url")
+                if upload_url:
+                    # Шаг 2: Скачиваем икону
+                    img = await client.get(photo_url)
+                    if img.status_code == 200:
+                        # Шаг 3: Загружаем по полученному URL
+                        uploaded = await client.post(
+                            upload_url,
+                            content=img.content,
+                            headers={"Content-Type": "image/jpeg"}
+                        )
+                        upload_result = uploaded.json()
+                        token = upload_result.get("token", "")
+                        if token:
+                            payload = {
+                                "text": text,
+                                "attachments": [{"type": "image", "payload": {"token": token}}]
+                            }
+                            result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload)
+                            logging.info(f"Канал: пост с фото отправлен")
+                            return
+                        logging.error(f"Нет токена в ответе: {upload_result}")
+                else:
+                    logging.error(f"Нет upload_url в ответе: {meta_data}")
+        # Без фото или если фото не удалось
         result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", {"text": text})
-        logging.info(f"Канал: пост отправлен: {result}")
+        logging.info(f"Канал: пост отправлен (без фото)")
     except Exception as e:
         logging.error(f"Канал: ошибка отправки: {e}")
-        # Fallback — отправляем без фото
         try:
             await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", {"text": text})
         except Exception:
@@ -1845,8 +1852,10 @@ async def channel_scheduler():
         today = now_utc.strftime("%Y-%m-%d")
 
         # Сброс флага в полночь МСК (21:00 UTC)
-        if now_utc.hour == 21 and now_utc.minute == 0:
+        reset_key = f"reset_{today}"
+        if now_utc.hour == 21 and reset_key not in sent_today:
             sent_today.clear()
+            sent_today.add(reset_key)
             logging.info("Канал: сброс флага отправленных постов")
 
         for hour, name, prompt in schedule:
