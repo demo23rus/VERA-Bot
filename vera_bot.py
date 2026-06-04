@@ -2260,16 +2260,23 @@ async def get_daily_gospel() -> str:
         )
 
 async def channel_post_loop():
-    """Автопостинг в канал по расписанию"""
+    """Автопостинг в канал по расписанию (МСК = UTC+3)"""
     await asyncio.sleep(10)
+    posted_today = set()
     while True:
-        now = datetime.now()
-        hour, minute = now.hour, now.minute
+        now_utc = datetime.utcnow()
+        msk_hour = (now_utc.hour + 3) % 24
+        hour, minute = msk_hour, now_utc.minute
+        today = now_utc.strftime("%Y-%m-%d")
         today_str = date_ru("short")
+
+        # Сброс флага в полночь МСК
+        if now_utc.hour == 21 and minute == 0:
+            posted_today.clear()
 
         try:
             # 07:00 — Утренняя молитва
-            if hour == 7 and minute == 0:
+            if hour == 7 and minute < 30 and f"{today}_7" not in posted_today:
                 prayer = PRAYERS["morning_ru"]
                 await send_channel_post(
                     f"🌅 *Доброе утро, {today_str}!*\n\n"
@@ -2280,12 +2287,12 @@ async def channel_post_loop():
                 )
 
             # 08:00 — Святой дня + краткое житие
-            elif hour == 8 and minute == 0:
+            elif hour == 8 and minute < 30 and f"{today}_8" not in posted_today:
                 text = await get_daily_saint()
                 await send_channel_post(text)
 
             # 09:00 — Именинники (только если есть)
-            elif hour == 9 and minute == 0:
+            elif hour == 9 and minute < 30 and f"{today}_9" not in posted_today:
                 saints = get_todays_saints()
                 if saints:
                     text = f"👼 *Именинники {today_str}*\n\n"
@@ -2297,17 +2304,17 @@ async def channel_post_loop():
                     await send_channel_post(text)
 
             # 10:00 — Евангелие дня
-            elif hour == 10 and minute == 0:
+            elif hour == 10 and minute < 30 and f"{today}_10" not in posted_today:
                 text = await get_daily_gospel()
                 await send_channel_post(text)
 
             # 12:00 — Цитата святых отцов
-            elif hour == 12 and minute == 0:
+            elif hour == 12 and minute < 30 and f"{today}_12" not in posted_today:
                 text = await get_daily_quote()
                 await send_channel_post(text)
 
             # 20:00 — Вечерняя молитва
-            elif hour == 20 and minute == 0:
+            elif hour == 20 and minute < 30 and f"{today}_20" not in posted_today:
                 prayer = PRAYERS["evening_ru"]
                 await send_channel_post(
                     f"🌙 *Добрый вечер, {today_str}!*\n\n"
