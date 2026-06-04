@@ -2271,8 +2271,11 @@ async def channel_post_loop():
         today_str = date_ru("short")
 
         # Сброс флага в полночь МСК (21:00 UTC)
-        if now_utc.hour == 21 and minute == 0:
+        # Проверяем только час чтобы не пропустить при sleep(55)
+        reset_key = f"reset_{today}"
+        if now_utc.hour == 21 and reset_key not in posted_today:
             posted_today.clear()
+            posted_today.add(reset_key)
 
         try:
             # 07:00 — Утренняя молитва
@@ -2286,6 +2289,8 @@ async def channel_post_loop():
                     f"─────────────────\n"
                     f"🙏 Все молитвы → @Moya\_Vera\_bot"
                 )
+                # Утренняя рассылка пользователям
+                asyncio.create_task(morning_broadcast())
 
             # 08:00 — Святой дня + краткое житие
             elif hour == 8 and f"{today}_8" not in posted_today:
