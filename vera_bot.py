@@ -2260,85 +2260,93 @@ async def get_daily_gospel() -> str:
         )
 
 async def channel_post_loop():
-    """Автопостинг в канал по расписанию (МСК = UTC+3)"""
+    """Автопостинг в канал по расписанию (МСК = UTC+3) — структура как в MAX"""
     await asyncio.sleep(10)
-    posted_today = set()
+
+    # Расписание: (час МСК, название, тип контента)
+    schedule = [
+        (7,  "утренняя молитва",  "morning"),
+        (8,  "святой дня",        "saint"),
+        (9,  "именинники",        "nameday"),
+        (10, "евангелие дня",     "gospel"),
+        (12, "цитата отцов",      "quote"),
+        (20, "вечерняя молитва",  "evening"),
+    ]
+
+    sent_today = set()
+
     while True:
         now_utc = datetime.utcnow()
         msk_hour = (now_utc.hour + 3) % 24
-        hour, minute = msk_hour, now_utc.minute
         today = now_utc.strftime("%Y-%m-%d")
         today_str = date_ru("short")
 
-        # Сброс флага в полночь МСК (21:00 UTC)
-        # Проверяем только час чтобы не пропустить при sleep(55)
+        # Сброс в полночь МСК (21:00 UTC) — надёжный через ключ
         reset_key = f"reset_{today}"
-        if now_utc.hour == 21 and reset_key not in posted_today:
-            posted_today.clear()
-            posted_today.add(reset_key)
+        if now_utc.hour == 21 and reset_key not in sent_today:
+            sent_today.clear()
+            sent_today.add(reset_key)
+            logging.info("Канал ТГ: сброс флага")
 
-        try:
-            # 07:00 — Утренняя молитва
-            if hour == 7 and f"{today}_7" not in posted_today:
-                posted_today.add(f"{today}_7")
-                prayer = PRAYERS["morning_ru"]
-                await send_channel_post(
-                    f"🌅 *Доброе утро, {today_str}!*\n\n"
-                    f"☦️ *Утренняя молитва*\n\n"
-                    f"{prayer['text']}\n\n"
-                    f"─────────────────\n"
-                    f"🙏 Все молитвы → @Moya\_Vera\_bot"
-                )
-                # Утренняя рассылка пользователям
-                asyncio.create_task(morning_broadcast())
+        for hour, name, ctype in schedule:
+            key = f"{today}_{hour}"
+            if msk_hour == hour and now_utc.minute < 30 and key not in sent_today:
+                sent_today.add(key)
+                logging.info(f"Канал ТГ {hour}:00 МСК — {name}")
+                try:
+                    if ctype == "morning":
+                        prayer = PRAYERS["morning_ru"]
+                        text = (
+                            f"🌅 *Доброе утро, {today_str}!*\n\n"
+                            f"☦️ *Утренняя молитва*\n\n"
+                            f"{prayer['text']}\n\n"
+                            "─────────────────\n"
+                            "🙏 Все молитвы → @Moya_Vera_bot"
+                        )
+                        await send_channel_post(text)
+                        asyncio.create_task(morning_broadcast())
 
-            # 08:00 — Святой дня + краткое житие
-            elif hour == 8 and f"{today}_8" not in posted_today:
-                posted_today.add(f"{today}_8")
-                text = await get_daily_saint()
-                await send_channel_post(text)
+                    elif ctype == "saint":
+                        text = await get_daily_saint()
+                        await send_channel_post(text)
 
-            # 09:00 — Именинники (только если есть)
-            elif hour == 9 and f"{today}_9" not in posted_today:
-                posted_today.add(f"{today}_9")
-                saints = get_todays_saints()
-                if saints:
-                    text = f"👼 *Именинники {today_str}*\n\n"
-                    for name, desc in saints:
-                        text += f"✨ *{name}* — {desc}\n"
-                    text += f"\n🎉 Поздравьте своих близких!\n\n"
-                    text += f"─────────────────\n"
-                    text += f"☦️ День ангела → @Moya\\_Vera\\_bot"
-                    await send_channel_post(text)
+                    elif ctype == "nameday":
+                        saints = get_todays_saints()
+                        if saints:
+                            text = f"👼 *Именинники {today_str}*\n\n"
+                            for sname, desc in saints:
+                                text += f"✨ *{sname}* — {desc}\n"
+                            text += "\n🎉 Поздравьте своих близких!\n\n"
+                            text += "─────────────────\n"
+                            text += "☦️ День ангела → @Moya_Vera_bot"
+                            await send_channel_post(text)
 
-            # 10:00 — Евангелие дня
-            elif hour == 10 and f"{today}_10" not in posted_today:
-                posted_today.add(f"{today}_10")
-                text = await get_daily_gospel()
-                await send_channel_post(text)
+                    elif ctype == "gospel":
+                        text = await get_daily_gospel()
+                        await send_channel_post(text)
 
-            # 12:00 — Цитата святых отцов
-            elif hour == 12 and f"{today}_12" not in posted_today:
-                posted_today.add(f"{today}_12")
-                text = await get_daily_quote()
-                await send_channel_post(text)
+                    elif ctype == "quote":
+                        text = await get_daily_quote()
+                        await send_channel_post(text)
 
-            # 20:00 — Вечерняя молитва
-            elif hour == 20 and f"{today}_20" not in posted_today:
-                posted_today.add(f"{today}_20")
-                prayer = PRAYERS["evening_ru"]
-                await send_channel_post(
-                    f"🌙 *Добрый вечер, {today_str}!*\n\n"
-                    f"☦️ *Вечерняя молитва*\n\n"
-                    f"{prayer['text']}\n\n"
-                    f"─────────────────\n"
-                    f"🙏 Молитвослов → @Moya\_Vera\_bot"
-                )
+                    elif ctype == "evening":
+                        prayer = PRAYERS["evening_ru"]
+                        text = (
+                            f"🌙 *Добрый вечер, {today_str}!*\n\n"
+                            f"☦️ *Вечерняя молитва*\n\n"
+                            f"{prayer['text']}\n\n"
+                            "─────────────────\n"
+                            "🙏 Молитвослов → @Moya_Vera_bot"
+                        )
+                        await send_channel_post(text)
 
-        except Exception as e:
-            logging.error(f"Ошибка автопостинга: {e}")
+                except Exception as e:
+                    logging.error(f"Ошибка поста канала ТГ {hour}:00 — {e}")
 
-        await asyncio.sleep(55)
+                await asyncio.sleep(60)
+
+        await asyncio.sleep(30)
+
 
 # ========== НАПОМИНАНИЯ О ДНЕ АНГЕЛА ==========
 async def get_prayer_of_day() -> str:
