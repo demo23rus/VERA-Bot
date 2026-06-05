@@ -154,7 +154,14 @@ openai_client = AsyncOpenAI(api_key=OPENAI_KEY)
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
 
 # ========== БОТ ==========
-bot = Bot(token=BOT_TOKEN)
+# Бот с увеличенным таймаутом сессии (против Request timeout при постинге)
+try:
+    from aiogram.client.session.aiohttp import AiohttpSession
+    _session = AiohttpSession(timeout=60)
+    bot = Bot(token=BOT_TOKEN, session=_session)
+except Exception as _e:
+    logging.error(f"Не удалось задать таймаут сессии, использую стандартный: {_e}")
+    bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher(storage=MemoryStorage())
 
 # ========== БАЗА ДАННЫХ ==========
@@ -2324,13 +2331,13 @@ async def channel_post_loop():
 
             for hour, ctype in schedule:
                 key = f"{today}_{hour}"
-                # Тройная проверка: правильный час, первые 30 мин, не отправлено
+                # Проверка: правильный час, первые 30 мин, не отправлено
                 if msk_hour == hour and now_utc.minute < 30 and key not in sent_today:
-                    # СРАЗУ помечаем — и в памяти, и на диске, ДО отправки
-                    sent_today.add(key)
-                    _mark_sent(key)
-                    logging.info(f"Канал ТГ {hour}:00 МСК — отправка ({ctype})")
+                    logging.info(f"Канал ТГ {hour}:00 МСК — готовлю ({ctype})")
 
+                    # 1) Формируем текст поста
+                    text = None
+                    do_broadcast = False
                     try:
                         if ctype == "morning":
                             prayer = PRAYERS["morning_ru"]
@@ -2341,13 +2348,9 @@ async def channel_post_loop():
                                 "─────────────────\n"
                                 "🙏 Все молитвы → @Moya_Vera_bot"
                             )
-                            await send_channel_post(text)
-                            asyncio.create_task(morning_broadcast())
-
+                            do_broadcast = True
                         elif ctype == "saint":
                             text = await get_daily_saint()
-                            await send_channel_post(text)
-
                         elif ctype == "nameday":
                             saints = get_todays_saints()
                             if saints:
@@ -2357,16 +2360,15 @@ async def channel_post_loop():
                                 text += "\n🎉 Поздравьте своих близких!\n\n"
                                 text += "─────────────────\n"
                                 text += "☦️ День ангела → @Moya_Vera_bot"
-                                await send_channel_post(text)
-
+                            else:
+                                # именинников нет — помечаем как обработанное, пропускаем
+                                sent_today.add(key)
+                                _mark_sent(key)
+                                continue
                         elif ctype == "gospel":
                             text = await get_daily_gospel()
-                            await send_channel_post(text)
-
                         elif ctype == "quote":
                             text = await get_daily_quote()
-                            await send_channel_post(text)
-
                         elif ctype == "evening":
                             prayer = PRAYERS["evening_ru"]
                             text = (
@@ -2376,13 +2378,32 @@ async def channel_post_loop():
                                 "─────────────────\n"
                                 "🙏 Молитвослов → @Moya_Vera_bot"
                             )
-                            await send_channel_post(text)
-
                     except Exception as e:
-                        logging.error(f"Канал ТГ: ошибка контента {hour}:00 — {e}")
+                        logging.error(f"Канал ТГ: ошибка подготовки {hour}:00 — {e}")
+                        text = None
 
-                    # После отправки — пауза, чтобы точно не зациклиться
-                    await asyncio.sleep(60)
+                    # 2) Отправляем с повторными попытками (до 3 раз)
+                    if text:
+                        ok = False
+                        for attempt in range(1, 4):
+                            try:
+                                ok = await send_channel_post(text)
+                                if ok:
+                                    break
+                            except Exception as e:
+                                logging.error(f"Канал ТГ: попытка {attempt} не удалась — {e}")
+                            await asyncio.sleep(10)
+
+                        # 3) Помечаем ТОЛЬКО если реально отправилось
+                        if ok:
+                            sent_today.add(key)
+                            _mark_sent(key)
+                            logging.info(f"Канал ТГ {hour}:00 — отправлено успешно")
+                            if do_broadcast:
+                                asyncio.create_task(morning_broadcast())
+                            await asyncio.sleep(60)
+                        else:
+                            logging.error(f"Канал ТГ {hour}:00 — НЕ отправлено после 3 попыток, повтор через 30 сек")
 
         except Exception as e:
             logging.error(f"Канал ТГ: ошибка цикла — {e}")
