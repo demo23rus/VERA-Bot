@@ -115,9 +115,25 @@ def get_channel_icon() -> str:
     return FEAST_ICONS_TG.get(today_key) or DAILY_ICONS_TG.get(day_num, DAILY_ICONS_TG[1])
 
 async def send_channel_post(text: str, with_photo: bool = True):
-    """Автопостинг отключён"""
-    logging.info("send_channel_post вызван но отключён")
-    pass
+    """Отправляет пост в канал с фото или без. Возвращает True при успехе."""
+    if with_photo:
+        icon_url = get_channel_icon()
+        try:
+            await bot.send_photo(
+                CHANNEL_ID,
+                photo=icon_url,
+                caption=text,
+                parse_mode="Markdown"
+            )
+            return True
+        except Exception as e:
+            logging.error(f"Канал: ошибка фото, пробую без фото: {e}")
+    try:
+        await bot.send_message(CHANNEL_ID, text, parse_mode="Markdown")
+        return True
+    except Exception as e:
+        logging.error(f"Канал: ошибка отправки текста: {e}")
+        return False
 
 logging.basicConfig(level=logging.INFO)
 logging.info(f"OPENAI_KEY loaded: {OPENAI_KEY[:15] if OPENAI_KEY else 'EMPTY'}...")
@@ -2247,11 +2263,131 @@ async def get_daily_gospel() -> str:
             f"☦️ Читать Библию → @Moya\\_Vera\\_bot"
         )
 
+SENT_LOG_FILE = "/root/vera_channel_sent.txt"
+
+def _load_sent_today():
+    """Читает с диска какие посты уже отправлены сегодня"""
+    today = datetime.utcnow().strftime("%Y-%m-%d")
+    sent = set()
+    try:
+        with open(SENT_LOG_FILE, "r") as f:
+            for line in f:
+                line = line.strip()
+                # храним строки вида 2026-06-05_7
+                if line.startswith(today):
+                    sent.add(line)
+    except FileNotFoundError:
+        pass
+    return sent
+
+def _mark_sent(key):
+    """Записывает на диск что пост отправлен"""
+    try:
+        with open(SENT_LOG_FILE, "a") as f:
+            f.write(key + "\n")
+    except Exception as e:
+        logging.error(f"Не удалось записать SENT_LOG: {e}")
+
 async def channel_post_loop():
-    """Автопостинг отключён — канал ведёт MAX бот"""
-    logging.info("Автопостинг ТГ канала отключён")
+    """Автопостинг в ТГ канал по МСК. Тройная защита от повторов:
+       1) флаг в памяти, 2) флаг на диске (переживает перезапуск),
+       3) sleep после поста."""
+    await asyncio.sleep(15)
+
+    # Расписание: (час МСК, тип контента)
+    schedule = [
+        (7,  "morning"),
+        (8,  "saint"),
+        (9,  "nameday"),
+        (10, "gospel"),
+        (12, "quote"),
+        (20, "evening"),
+    ]
+
+    # При старте подгружаем что уже отправлено сегодня (защита от перезапуска)
+    sent_today = _load_sent_today()
+    logging.info(f"Канал ТГ: загружено отправленных сегодня: {len(sent_today)}")
+
     while True:
-        await asyncio.sleep(3600)
+        try:
+            now_utc = datetime.utcnow()
+            msk_hour = (now_utc.hour + 3) % 24
+            today = now_utc.strftime("%Y-%m-%d")
+            today_str = date_ru("short")
+
+            # Сброс в полночь МСК (21:00 UTC) — через ключ, один раз
+            reset_key = f"{today}_reset"
+            if now_utc.hour == 21 and reset_key not in sent_today:
+                sent_today = {reset_key}  # очищаем память, оставляем только reset
+                _mark_sent(reset_key)
+                logging.info("Канал ТГ: новый день, флаги сброшены")
+
+            for hour, ctype in schedule:
+                key = f"{today}_{hour}"
+                # Тройная проверка: правильный час, первые 30 мин, не отправлено
+                if msk_hour == hour and now_utc.minute < 30 and key not in sent_today:
+                    # СРАЗУ помечаем — и в памяти, и на диске, ДО отправки
+                    sent_today.add(key)
+                    _mark_sent(key)
+                    logging.info(f"Канал ТГ {hour}:00 МСК — отправка ({ctype})")
+
+                    try:
+                        if ctype == "morning":
+                            prayer = PRAYERS["morning_ru"]
+                            text = (
+                                "🌅 *Доброе утро, " + today_str + "!*\n\n"
+                                "☦️ *Утренняя молитва*\n\n"
+                                + prayer["text"] + "\n\n"
+                                "─────────────────\n"
+                                "🙏 Все молитвы → @Moya_Vera_bot"
+                            )
+                            await send_channel_post(text)
+                            asyncio.create_task(morning_broadcast())
+
+                        elif ctype == "saint":
+                            text = await get_daily_saint()
+                            await send_channel_post(text)
+
+                        elif ctype == "nameday":
+                            saints = get_todays_saints()
+                            if saints:
+                                text = "👼 *Именинники " + today_str + "*\n\n"
+                                for sname, desc in saints:
+                                    text += "✨ *" + sname + "* — " + desc + "\n"
+                                text += "\n🎉 Поздравьте своих близких!\n\n"
+                                text += "─────────────────\n"
+                                text += "☦️ День ангела → @Moya_Vera_bot"
+                                await send_channel_post(text)
+
+                        elif ctype == "gospel":
+                            text = await get_daily_gospel()
+                            await send_channel_post(text)
+
+                        elif ctype == "quote":
+                            text = await get_daily_quote()
+                            await send_channel_post(text)
+
+                        elif ctype == "evening":
+                            prayer = PRAYERS["evening_ru"]
+                            text = (
+                                "🌙 *Добрый вечер, " + today_str + "!*\n\n"
+                                "☦️ *Вечерняя молитва*\n\n"
+                                + prayer["text"] + "\n\n"
+                                "─────────────────\n"
+                                "🙏 Молитвослов → @Moya_Vera_bot"
+                            )
+                            await send_channel_post(text)
+
+                    except Exception as e:
+                        logging.error(f"Канал ТГ: ошибка контента {hour}:00 — {e}")
+
+                    # После отправки — пауза, чтобы точно не зациклиться
+                    await asyncio.sleep(60)
+
+        except Exception as e:
+            logging.error(f"Канал ТГ: ошибка цикла — {e}")
+
+        await asyncio.sleep(30)
 
 
 # ========== НАПОМИНАНИЯ О ДНЕ АНГЕЛА ==========
