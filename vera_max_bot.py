@@ -1895,8 +1895,7 @@ async def channel_scheduler():
 
                 if text:
                     # Икона дня — праздничная или по числу месяца
-                    icon_url = get_icon_for_today() if name != "история святого" else None
-                    await post_to_channel(text, photo_url=icon_url)
+                    await post_to_channel(text)
                     # В 7:00 запускаем утреннюю рассылку пользователям
                     if hour == 7:
                         asyncio.create_task(morning_broadcast_max())
