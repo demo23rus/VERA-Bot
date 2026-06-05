@@ -52,6 +52,11 @@ _env = load_env()
 # ========== КОНФИГ ==========
 BOT_TOKEN         = "8830150213:AAFcyR-_mnSpdWnlCngaArSKXA_bp-YLTnY"
 CHANNEL_ID        = "@SvyatoyPut"
+OPENAI_KEY        = _env.get("OPENAI_KEY") or os.environ.get("OPENAI_KEY", "")
+ANTHROPIC_KEY     = _env.get("ANTHROPIC_KEY") or os.environ.get("ANTHROPIC_KEY", "")
+OWNER_ID          = 549639607
+CREDENTIALS_FILE  = "/root/google_credentials.json"
+SPREADSHEET_ID    = "1PE7CaFuWOe_eygQqIoMAmUdJBtATbIaNfZR4cvarPCA"
 
 # 31 икона — ротация по числу месяца
 DAILY_ICONS_TG = {
@@ -125,11 +130,6 @@ async def send_channel_post(text: str, with_photo: bool = True):
             logging.error(f"Ошибка отправки фото в канал: {e}")
     # Fallback — без фото
     await bot.send_message(CHANNEL_ID, text, parse_mode="Markdown")
-OPENAI_KEY        = _env.get("OPENAI_KEY") or os.environ.get("OPENAI_KEY", "")
-ANTHROPIC_KEY     = _env.get("ANTHROPIC_KEY") or os.environ.get("ANTHROPIC_KEY", "")
-OWNER_ID          = 549639607
-CREDENTIALS_FILE  = "/root/google_credentials.json"
-SPREADSHEET_ID    = "1PE7CaFuWOe_eygQqIoMAmUdJBtATbIaNfZR4cvarPCA"
 
 logging.basicConfig(level=logging.INFO)
 logging.info(f"OPENAI_KEY loaded: {OPENAI_KEY[:15] if OPENAI_KEY else 'EMPTY'}...")
