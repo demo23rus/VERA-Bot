@@ -114,7 +114,7 @@ def get_channel_icon() -> str:
     day_num = datetime.now().day
     return FEAST_ICONS_TG.get(today_key) or DAILY_ICONS_TG.get(day_num, DAILY_ICONS_TG[1])
 
-async def send_channel_post(text: str, with_photo: bool = True):
+async def send_channel_post(text: str, with_photo: bool = False):
     """Отправляет пост в канал с фото или без. Возвращает True при успехе."""
     if with_photo:
         icon_url = get_channel_icon()
