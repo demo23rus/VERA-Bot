@@ -2311,7 +2311,6 @@ async def channel_post_loop():
     schedule = [
         (7,  "morning"),
         (8,  "saint"),
-        (9,  "nameday"),
         (10, "gospel"),
         (12, "quote"),
         (20, "evening"),
