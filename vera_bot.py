@@ -2345,14 +2345,26 @@ async def channel_post_loop():
                     do_broadcast = False
                     try:
                         if ctype == "morning":
-                            prayer = PRAYERS["morning_ru"]
-                            text = (
-                                "🌅 *Доброе утро, " + today_str + "!*\n\n"
-                                "☦️ *Утренняя молитва*\n\n"
-                                + prayer["text"] + "\n\n"
-                                "─────────────────\n"
-                                "🙏 Все молитвы → @Moya_Vera_bot"
+                            feast = get_todays_feast()
+                            saints = get_todays_saints()
+                            context = ""
+                            if feast:
+                                context = f"Сегодня праздник: {feast}."
+                            elif saints:
+                                context = f"Сегодня память: {', '.join([s[0] for s in saints[:2]])}."
+                            prompt = (
+                                f"Напиши пост для православного канала — утренняя молитва или благословение на день. "
+                                f"Сегодня {today_str}. {context} "
+                                f"4-5 предложений. Начни с эмодзи 🌅. "
+                                f"В конце добавь ссылку: Все молитвы → @Moya_Vera_bot. Пиши только по-русски."
                             )
+                            msg = claude_client.messages.create(
+                                model="claude-sonnet-4-5",
+                                max_tokens=400,
+                                system="Ты православный священник. Пишешь тепло и душевно.",
+                                messages=[{"role": "user", "content": prompt}]
+                            )
+                            text = msg.content[0].text
                             do_broadcast = True
                         elif ctype == "saint":
                             text = await get_daily_saint()
@@ -2375,14 +2387,19 @@ async def channel_post_loop():
                         elif ctype == "quote":
                             text = await get_daily_quote()
                         elif ctype == "evening":
-                            prayer = PRAYERS["evening_ru"]
-                            text = (
-                                "🌙 *Добрый вечер, " + today_str + "!*\n\n"
-                                "☦️ *Вечерняя молитва*\n\n"
-                                + prayer["text"] + "\n\n"
-                                "─────────────────\n"
-                                "🙏 Молитвослов → @Moya_Vera_bot"
+                            prompt = (
+                                f"Напиши пост для православного канала — вечерняя молитва или слова утешения на конец дня. "
+                                f"Сегодня {today_str}. "
+                                f"4-5 предложений. Начни с эмодзи 🌙. "
+                                f"В конце добавь ссылку: Молитвослов → @Moya_Vera_bot. Пиши только по-русски."
                             )
+                            msg = claude_client.messages.create(
+                                model="claude-sonnet-4-5",
+                                max_tokens=400,
+                                system="Ты православный священник. Пишешь тепло и душевно.",
+                                messages=[{"role": "user", "content": prompt}]
+                            )
+                            text = msg.content[0].text
                     except Exception as e:
                         logging.error(f"Канал ТГ: ошибка подготовки {hour}:00 — {e}")
                         text = None
