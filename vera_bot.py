@@ -2355,8 +2355,7 @@ async def channel_post_loop():
                             prompt = (
                                 f"Напиши пост для православного канала — утренняя молитва или благословение на день. "
                                 f"Сегодня {today_str}. {context} "
-                                f"4-5 предложений. Начни с эмодзи 🌅. "
-                                f"В самом конце напиши ТОЧНО эту строку без изменений: Все молитвы → @Moya_Vera_bot. Пиши только по-русски."
+                                f"4-5 предложений. Начни с эмодзи 🌅. Пиши только по-русски. Без ссылок в конце."
                             )
                             msg = claude_client.messages.create(
                                 model="claude-sonnet-4-5",
@@ -2364,7 +2363,7 @@ async def channel_post_loop():
                                 system="Ты православный священник. Пишешь тепло и душевно.",
                                 messages=[{"role": "user", "content": prompt}]
                             )
-                            text = msg.content[0].text
+                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 Все молитвы → @Moya_Vera_bot"
                             do_broadcast = True
                         elif ctype == "saint":
                             text = await get_daily_saint()
@@ -2390,8 +2389,7 @@ async def channel_post_loop():
                             prompt = (
                                 f"Напиши пост для православного канала — вечерняя молитва или слова утешения на конец дня. "
                                 f"Сегодня {today_str}. "
-                                f"4-5 предложений. Начни с эмодзи 🌙. "
-                                f"В самом конце напиши ТОЧНО эту строку без изменений: Молитвослов → @Moya_Vera_bot. Пиши только по-русски."
+                                f"4-5 предложений. Начни с эмодзи 🌙. Пиши только по-русски. Без ссылок в конце."
                             )
                             msg = claude_client.messages.create(
                                 model="claude-sonnet-4-5",
@@ -2399,7 +2397,7 @@ async def channel_post_loop():
                                 system="Ты православный священник. Пишешь тепло и душевно.",
                                 messages=[{"role": "user", "content": prompt}]
                             )
-                            text = msg.content[0].text
+                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 Молитвослов → @Moya_Vera_bot"
                     except Exception as e:
                         logging.error(f"Канал ТГ: ошибка подготовки {hour}:00 — {e}")
                         text = None
