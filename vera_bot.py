@@ -326,9 +326,9 @@ def get_sheet():
         client = gspread.authorize(creds)
         sp     = client.open_by_key(SPREADSHEET_ID)
         try:
-            sheet = sp.worksheet("ВераБот")
+            sheet = sp.worksheet("ВераТГ")
         except Exception:
-            sheet = sp.add_worksheet(title="ВераБот", rows=1000, cols=10)
+            sheet = sp.add_worksheet(title="ВераТГ", rows=1000, cols=10)
             sheet.insert_row(["ID","Username","Имя","Церковное имя","Дата рождения","День ангела","Тариф","Дата регистрации","Запросов AI","Последняя активность","Отзывов","Пожертвований"], 1)
         return sheet
     except Exception as e:
@@ -1802,7 +1802,7 @@ def add_donation_to_sheet(user_id, username, first_name, amount):
         ])
         # Обновляем счётчик пожертвований в листе ВераБот
         try:
-            main_sheet = sp.worksheet("ВераБот")
+            main_sheet = sp.worksheet("ВераТГ")
             col = main_sheet.col_values(1)
             if str(user_id) in col:
                 row = col.index(str(user_id)) + 1
@@ -1835,7 +1835,7 @@ def add_review_to_sheet(user_id, username, first_name, text):
         ])
         # Обновляем счётчик отзывов в листе ВераБот
         try:
-            main_sheet = sp.worksheet("ВераБот")
+            main_sheet = sp.worksheet("ВераТГ")
             col = main_sheet.col_values(1)
             if str(user_id) in col:
                 row = col.index(str(user_id)) + 1
