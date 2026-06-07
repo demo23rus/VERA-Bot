@@ -118,9 +118,9 @@ def sheets_add_user_max(user_id, username, first_name):
         sp = get_spreadsheet()
         if not sp: return
         try:
-            sheet = sp.worksheet("MAX Бот")
+            sheet = sp.worksheet("С верой MAX")
         except Exception:
-            sheet = sp.add_worksheet(title="MAX Бот", rows=2000, cols=8)
+            sheet = sp.add_worksheet(title="С верой MAX", rows=2000, cols=8)
             sheet.insert_row(["ID","Username","Имя","Дата регистрации","Последняя активность","Запросов AI","Отзывов","Пожертвований"], 1)
         col = sheet.col_values(1)
         if str(user_id) not in col:
@@ -139,7 +139,7 @@ def sheets_update_activity_max(user_id):
     try:
         sp = get_spreadsheet()
         if not sp: return
-        sheet = sp.worksheet("MAX Бот")
+        sheet = sp.worksheet("С верой MAX")
         col = sheet.col_values(1)
         if str(user_id) in col:
             row = col.index(str(user_id)) + 1
@@ -167,7 +167,7 @@ def sheets_add_review_max(user_id, username, first_name, text):
         ])
         # Увеличиваем счётчик отзывов
         try:
-            main_sheet = sp.worksheet("MAX Бот")
+            main_sheet = sp.worksheet("С верой MAX")
             col = main_sheet.col_values(1)
             if str(user_id) in col:
                 row = col.index(str(user_id)) + 1
@@ -199,7 +199,7 @@ def sheets_add_donation(user_id, username, first_name, amount, source="MAX"):
         # Обновляем счётчик в основном листе MAX
         if source == "MAX":
             try:
-                main_sheet = sp.worksheet("MAX Бот")
+                main_sheet = sp.worksheet("С верой MAX")
                 col = main_sheet.col_values(1)
                 if str(user_id) in col:
                     row = col.index(str(user_id)) + 1
