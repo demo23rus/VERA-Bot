@@ -2150,48 +2150,60 @@ async def get_daily_saint() -> str:
     today = date_ru("short")
     feast = get_todays_feast()
     saints = get_todays_saints()
-
-    text = f"☦️ *{today}*\n\n"
+    context = ""
     if feast:
-        text += f"🎉 *{feast}*\n\n"
-
-    if saints:
-        text += "👼 *Именинники сегодня:*\n"
-        for name, desc in saints[:5]:
-            text += f"— {name} ({desc})\n"
-        text += "\n"
-
-    text += "🙏 Поздравляем всех именинников!\n"
-    text += "Пусть святые покровители хранят вас.\n\n"
-    text += f"📖 Подробнее — в боте @Moya\\_Vera\\_bot"
-    return text
+        context = f"Сегодня праздник: {feast}."
+    elif saints:
+        names = ", ".join([s[0] for s in saints[:3]])
+        context = f"Сегодня память: {names}."
+    prompt = (
+        f"Напиши пост для православного канала — память святого дня или праздник. "
+        f"{context} Сегодня {today}. "
+        f"Расскажи о святом или празднике тепло и душевно — кто такой, подвиг, чудеса. "
+        f"3-4 предложения. Начни с эмодзи ✝️. Пиши только по-русски."
+    )
+    try:
+        msg = claude_client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=400,
+            system="Ты православный священник с многолетним опытом. Пишешь тепло и душевно.",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return msg.content[0].text.strip() + "\n\n─────────────────\n☦️ Подробнее → https://t.me/Moya_Vera_bot"
+    except Exception as e:
+        logging.error(f"get_daily_saint error: {e}")
+        if saints:
+            t = f"✝️ *{today}*\n\n"
+            for name, desc in saints[:3]:
+                t += f"👼 {name} — {desc}\n"
+            return t + "\n─────────────────\n☦️ https://t.me/Moya_Vera_bot"
+        return f"✝️ *{today}*\n\n─────────────────\n☦️ https://t.me/Moya_Vera_bot"
 
 async def get_daily_quote() -> str:
-    quotes = [
-        ("Нет ничего невозможного для молящегося.", "Преп. Серафим Саровский"),
-        ("Стяжи дух мирен и тысячи спасутся вокруг тебя.", "Преп. Серафим Саровский"),
-        ("Не осуждай никого — не знаешь, как сам окончишь жизнь.", "Авва Дорофей"),
-        ("Молитва — это разговор с Богом. Относись к ней как к важнейшему делу жизни.", "Свт. Феофан Затворник"),
-        ("Смирение — мать всех добродетелей.", "Свт. Иоанн Златоуст"),
-        ("Бог гордым противится, а смиренным даёт благодать.", "1 Пет. 5:5"),
-        ("Просите — и дано будет вам; ищите — и найдёте; стучите — и отворят вам.", "Мф. 7:7"),
-        ("Любовь долготерпит, милосердствует, любовь не завидует.", "1 Кор. 13:4"),
-        ("Всё могу в укрепляющем меня Иисусе Христе.", "Флп. 4:13"),
-        ("Господь — Пастырь мой; я ни в чём не буду нуждаться.", "Пс. 22:1"),
-        ("Где нет смирения — там нет и добродетели.", "Прп. Амвросий Оптинский"),
-        ("Радость — признак духовного здоровья.", "Прп. Паисий Святогорец"),
-        ("Терпение — корень всех добродетелей.", "Прп. Иоанн Лествичник"),
-    ]
-    import random
-    text_q, author = random.choice(quotes)
     today_str = date_ru("short")
-    return (
-        f"✨ *СЛОВО НА ДЕНЬ • {today_str}*\n\n"
-        f"«{text_q}»\n\n"
-        f"— *{author}*\n\n"
-        f"─────────────────\n"
-        f"☦️ Молитвы и тексты → @Moya\\_Vera\\_bot"
-    )
+    try:
+        msg = claude_client.messages.create(
+            model="claude-sonnet-4-5",
+            max_tokens=300,
+            system="Ты православный священник. Пишешь тепло и душевно.",
+            messages=[{"role": "user", "content": (
+                f"Напиши пост для православного канала — мудрая цитата православного святого или старца "
+                f"с кратким пояснением (1-2 предложения). Сегодня {today_str}. "
+                f"Начни с эмодзи ✨. Формат: цитата в кавычках, автор, пояснение. Пиши только по-русски."
+            )}]
+        )
+        return msg.content[0].text.strip() + "\n\n─────────────────\n☦️ Молитвы и тексты → https://t.me/Moya_Vera_bot"
+    except Exception as e:
+        logging.error(f"get_daily_quote error: {e}")
+        import random
+        quotes = [
+            ("Стяжи дух мирен и тысячи спасутся вокруг тебя.", "Преп. Серафим Саровский"),
+            ("Где нет смирения — там нет и добродетели.", "Прп. Амвросий Оптинский"),
+            ("Терпение — корень всех добродетелей.", "Прп. Иоанн Лествичник"),
+        ]
+        text_q, author = random.choice(quotes)
+        return f"✨ *СЛОВО НА ДЕНЬ • {today_str}*\n\n«{text_q}»\n\n— *{author}*\n\n─────────────────\n☦️ https://t.me/Moya_Vera_bot"
+
 
 def get_fast_today() -> str:
     """Возвращает информацию о посте сегодня"""
@@ -2314,6 +2326,10 @@ async def channel_post_loop():
         (10, "gospel"),
         (12, "quote"),
         (20, "evening"),
+        # Еженедельные рубрики
+        (11, "film"),    # воскресенье
+        (11, "qa"),      # пятница
+        (11, "life"),    # суббота
     ]
 
     # При старте подгружаем что уже отправлено сегодня (защита от перезапуска)
@@ -2363,7 +2379,7 @@ async def channel_post_loop():
                                 system="Ты православный священник. Пишешь тепло и душевно.",
                                 messages=[{"role": "user", "content": prompt}]
                             )
-                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 Все молитвы → @Moya_Vera_bot"
+                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 Все молитвы → https://t.me/Moya_Vera_bot"
                             do_broadcast = True
                         elif ctype == "saint":
                             text = await get_daily_saint()
@@ -2375,7 +2391,7 @@ async def channel_post_loop():
                                     text += "✨ *" + sname + "* — " + desc + "\n"
                                 text += "\n🎉 Поздравьте своих близких!\n\n"
                                 text += "─────────────────\n"
-                                text += "☦️ День ангела → @Moya_Vera_bot"
+                                text += "☦️ День ангела → https://t.me/Moya_Vera_bot"
                             else:
                                 # именинников нет — помечаем как обработанное, пропускаем
                                 sent_today.add(key)
@@ -2397,7 +2413,49 @@ async def channel_post_loop():
                                 system="Ты православный священник. Пишешь тепло и душевно.",
                                 messages=[{"role": "user", "content": prompt}]
                             )
-                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 Молитвослов → @Moya_Vera_bot"
+                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 Молитвослов → https://t.me/Moya_Vera_bot"
+
+                        elif ctype == "film" and now_utc.weekday() == 6:  # воскресенье
+                            msg = claude_client.messages.create(
+                                model="claude-sonnet-4-5",
+                                max_tokens=500,
+                                system="Ты православный священник. Пишешь тепло и душевно.",
+                                messages=[{"role": "user", "content": (
+                                    f"Напиши пост для православного канала — рекомендация православного фильма или документального фильма о вере. "
+                                    f"Укажи название, год, краткое описание (2-3 предложения) и почему стоит посмотреть. "
+                                    f"Начни с эмодзи 📽️. Пиши только по-русски. Без ссылок в конце."
+                                )}]
+                            )
+                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 https://t.me/Moya_Vera_bot"
+
+                        elif ctype == "qa" and now_utc.weekday() == 4:  # пятница
+                            msg = claude_client.messages.create(
+                                model="claude-sonnet-4-5",
+                                max_tokens=500,
+                                system="Ты православный священник с многолетним опытом. Отвечаешь тепло и понятно.",
+                                messages=[{"role": "user", "content": (
+                                    f"Напиши пост для православного канала в формате вопрос-ответ. "
+                                    f"Придумай частый вопрос о вере, молитве или таинствах который задают люди приходящие к вере. "
+                                    f"Дай развёрнутый тёплый ответ. Начни с эмодзи ❓. Пиши только по-русски. Без ссылок в конце."
+                                )}]
+                            )
+                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 https://t.me/Moya_Vera_bot"
+
+                        elif ctype == "life" and now_utc.weekday() == 5:  # суббота
+                            msg = claude_client.messages.create(
+                                model="claude-sonnet-4-5",
+                                max_tokens=600,
+                                system="Ты православный священник. Пишешь тепло и душевно.",
+                                messages=[{"role": "user", "content": (
+                                    f"Напиши пост для православного канала — развёрнутое житие православного святого. "
+                                    f"Выбери интересного святого, расскажи его историю — подвиг, чудеса, значение для церкви. "
+                                    f"5-7 предложений. Начни с эмодзи 📖. Пиши только по-русски. Без ссылок в конце."
+                                )}]
+                            )
+                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 https://t.me/Moya_Vera_bot"
+
+                        else:
+                            text = None  # не тот день недели для рубрики
                     except Exception as e:
                         logging.error(f"Канал ТГ: ошибка подготовки {hour}:00 — {e}")
                         text = None
