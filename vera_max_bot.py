@@ -1953,7 +1953,7 @@ async def channel_scheduler():
                     except Exception as e:
                         logging.error(f"Ошибка рубрики житие: {e}")
                         text = None
-                elif not prompt:
+                else:
                     text = await generate_channel_post(prompt)
 
                 if text:
