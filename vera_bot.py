@@ -2169,15 +2169,15 @@ async def get_daily_saint() -> str:
             system="Ты православный священник с многолетним опытом. Пишешь тепло и душевно.",
             messages=[{"role": "user", "content": prompt}]
         )
-        return msg.content[0].text.strip() + "\n\n─────────────────\n☦️ Подробнее → https://t.me/Moya_Vera_bot"
+        return msg.content[0].text.strip() + "\n\n─────────────────\n☦️ Подробнее → @Moya\\_Vera\\_bot"
     except Exception as e:
         logging.error(f"get_daily_saint error: {e}")
         if saints:
             t = f"✝️ *{today}*\n\n"
             for name, desc in saints[:3]:
                 t += f"👼 {name} — {desc}\n"
-            return t + "\n─────────────────\n☦️ https://t.me/Moya_Vera_bot"
-        return f"✝️ *{today}*\n\n─────────────────\n☦️ https://t.me/Moya_Vera_bot"
+            return t + "\n─────────────────\n☦️ @Moya\\_Vera\\_bot"
+        return f"✝️ *{today}*\n\n─────────────────\n☦️ @Moya\\_Vera\\_bot"
 
 async def get_daily_quote() -> str:
     today_str = date_ru("short")
@@ -2192,7 +2192,7 @@ async def get_daily_quote() -> str:
                 f"Начни с эмодзи ✨. Формат: цитата в кавычках, автор, пояснение. Пиши только по-русски."
             )}]
         )
-        return msg.content[0].text.strip() + "\n\n─────────────────\n☦️ Молитвы и тексты → https://t.me/Moya_Vera_bot"
+        return msg.content[0].text.strip() + "\n\n─────────────────\n☦️ Молитвы и тексты → @Moya\\_Vera\\_bot"
     except Exception as e:
         logging.error(f"get_daily_quote error: {e}")
         import random
@@ -2202,7 +2202,7 @@ async def get_daily_quote() -> str:
             ("Терпение — корень всех добродетелей.", "Прп. Иоанн Лествичник"),
         ]
         text_q, author = random.choice(quotes)
-        return f"✨ *СЛОВО НА ДЕНЬ • {today_str}*\n\n«{text_q}»\n\n— *{author}*\n\n─────────────────\n☦️ https://t.me/Moya_Vera_bot"
+        return f"✨ *СЛОВО НА ДЕНЬ • {today_str}*\n\n«{text_q}»\n\n— *{author}*\n\n─────────────────\n☦️ @Moya\\_Vera\\_bot"
 
 
 def get_fast_today() -> str:
@@ -2379,7 +2379,7 @@ async def channel_post_loop():
                                 system="Ты православный священник. Пишешь тепло и душевно.",
                                 messages=[{"role": "user", "content": prompt}]
                             )
-                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 Все молитвы → https://t.me/Moya_Vera_bot"
+                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 Все молитвы → @Moya\\_Vera\\_bot"
                             do_broadcast = True
                         elif ctype == "saint":
                             text = await get_daily_saint()
@@ -2391,7 +2391,7 @@ async def channel_post_loop():
                                     text += "✨ *" + sname + "* — " + desc + "\n"
                                 text += "\n🎉 Поздравьте своих близких!\n\n"
                                 text += "─────────────────\n"
-                                text += "☦️ День ангела → https://t.me/Moya_Vera_bot"
+                                text += "☦️ День ангела → @Moya\\_Vera\\_bot"
                             else:
                                 # именинников нет — помечаем как обработанное, пропускаем
                                 sent_today.add(key)
@@ -2413,7 +2413,7 @@ async def channel_post_loop():
                                 system="Ты православный священник. Пишешь тепло и душевно.",
                                 messages=[{"role": "user", "content": prompt}]
                             )
-                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 Молитвослов → https://t.me/Moya_Vera_bot"
+                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 Молитвослов → @Moya\\_Vera\\_bot"
 
                         elif ctype == "film" and now_utc.weekday() == 6:  # воскресенье
                             msg = claude_client.messages.create(
@@ -2426,7 +2426,7 @@ async def channel_post_loop():
                                     f"Начни с эмодзи 📽️. Пиши только по-русски. Без ссылок в конце."
                                 )}]
                             )
-                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 https://t.me/Moya_Vera_bot"
+                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 @Moya\\_Vera\\_bot"
 
                         elif ctype == "qa" and now_utc.weekday() == 4:  # пятница
                             msg = claude_client.messages.create(
@@ -2439,7 +2439,7 @@ async def channel_post_loop():
                                     f"Дай развёрнутый тёплый ответ. Начни с эмодзи ❓. Пиши только по-русски. Без ссылок в конце."
                                 )}]
                             )
-                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 https://t.me/Moya_Vera_bot"
+                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 @Moya\\_Vera\\_bot"
 
                         elif ctype == "life" and now_utc.weekday() == 5:  # суббота
                             msg = claude_client.messages.create(
@@ -2452,7 +2452,7 @@ async def channel_post_loop():
                                     f"5-7 предложений. Начни с эмодзи 📖. Пиши только по-русски. Без ссылок в конце."
                                 )}]
                             )
-                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 https://t.me/Moya_Vera_bot"
+                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 @Moya\\_Vera\\_bot"
 
                         else:
                             text = None  # не тот день недели для рубрики
@@ -2551,7 +2551,7 @@ async def morning_broadcast():
         + feast_line
         + "\u2626\ufe0f *\u041c\u043e\u043b\u0438\u0442\u0432\u0430 \u0434\u043d\u044f*\n\n"
         + prayer
-        + "\n\n\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\u2500\n\U0001f64f \u0412\u0441\u0435 \u043c\u043e\u043b\u0438\u0442\u0432\u044b \u2192 @Moya\_Vera\_bot"
+        + "\n\n─────────────\n🙏 Все молитвы → @Moya\\_Vera\\_bot"
     )
     sent = 0
     for user_id, name in users:
