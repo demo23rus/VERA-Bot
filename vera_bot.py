@@ -52,6 +52,8 @@ _env = load_env()
 # ========== КОНФИГ ==========
 BOT_TOKEN         = "8830150213:AAFcyR-_mnSpdWnlCngaArSKXA_bp-YLTnY"
 CHANNEL_ID        = "@SvyatoyPut"
+BOT_USERNAME      = "Moya_Vera_bot"
+BOT_URL           = f"https://t.me/{BOT_USERNAME}"
 OPENAI_KEY        = _env.get("OPENAI_KEY") or os.environ.get("OPENAI_KEY", "")
 ANTHROPIC_KEY     = _env.get("ANTHROPIC_KEY") or os.environ.get("ANTHROPIC_KEY", "")
 OWNER_ID          = 549639607
@@ -114,26 +116,69 @@ def get_channel_icon() -> str:
     day_num = datetime.now().day
     return FEAST_ICONS_TG.get(today_key) or DAILY_ICONS_TG.get(day_num, DAILY_ICONS_TG[1])
 
-async def send_channel_post(text: str, with_photo: bool = False):
-    """Отправляет пост в канал с фото или без. Возвращает True при успехе."""
+BOT_DEEP_LINKS = {
+    "morning":  ("🙏 Открыть молитвы", "prayers"),
+    "saint":    ("👼 Найти святого покровителя", "saints"),
+    "gospel":   ("📖 Открыть Евангелие дня", "gospel"),
+    "quote":    ("❓ Задать вопрос о вере", "question"),
+    "evening":  ("🌙 Открыть вечерние молитвы", "evening"),
+    "qa":       ("✍️ Задать свой вопрос", "question"),
+    "life":     ("👼 Найти святого по имени", "saints"),
+    "film":     ("📚 Открыть библиотеку", "library"),
+}
+
+CHANNEL_CTA_TEXT = {
+    "morning": "🙏 Начните день с молитвы — откройте молитвослов в помощнике.",
+    "saint": "👼 Узнайте о своём небесном покровителе и днях его памяти.",
+    "gospel": "📖 Откройте Евангелие дня и другие материалы для чтения.",
+    "quote": "❓ Есть вопрос о вере? Задайте его православному помощнику.",
+    "evening": "🌙 Завершите день спокойно — откройте вечерние молитвы.",
+    "qa": "✍️ Не нашли ответ на свой вопрос? Спросите лично.",
+    "life": "👼 Найдите святого по имени и узнайте дни его памяти.",
+    "film": "📚 Откройте православную библиотеку и подборку полезных материалов.",
+}
+
+def channel_button(ctype: str) -> InlineKeyboardMarkup:
+    label, start_param = BOT_DEEP_LINKS.get(ctype, ("☦️ Открыть помощника", "menu"))
+    return InlineKeyboardMarkup(inline_keyboard=[[
+        InlineKeyboardButton(text=label, url=f"{BOT_URL}?start={start_param}")
+    ]])
+
+def add_channel_cta(text: str, ctype: str) -> str:
+    cta = CHANNEL_CTA_TEXT.get(ctype, "☦️ Откройте православного помощника.")
+    return f"{text.rstrip()}\n\n─────────────────\n{cta}"
+
+async def send_channel_post(text: str, ctype: str, with_photo: bool = False):
+    """Отправляет пост с тематической кнопкой. При сбое фото отправляет текстом."""
+    reply_markup = channel_button(ctype)
+    final_text = add_channel_cta(text, ctype)
     if with_photo:
         icon_url = get_channel_icon()
         try:
             await bot.send_photo(
                 CHANNEL_ID,
                 photo=icon_url,
-                caption=text,
-                parse_mode="Markdown"
+                caption=final_text[:1024],
+                parse_mode="Markdown",
+                reply_markup=reply_markup,
             )
             return True
         except Exception as e:
             logging.error(f"Канал: ошибка фото, пробую без фото: {e}")
     try:
-        await bot.send_message(CHANNEL_ID, text, parse_mode="Markdown")
+        await bot.send_message(
+            CHANNEL_ID, final_text, parse_mode="Markdown", reply_markup=reply_markup
+        )
         return True
     except Exception as e:
-        logging.error(f"Канал: ошибка отправки текста: {e}")
-        return False
+        logging.error(f"Канал: ошибка отправки с кнопкой: {e}")
+        try:
+            fallback = final_text + f"\n\n{BOT_URL}"
+            await bot.send_message(CHANNEL_ID, fallback, parse_mode="Markdown")
+            return True
+        except Exception as fallback_error:
+            logging.error(f"Канал: резервная отправка не удалась: {fallback_error}")
+            return False
 
 logging.basicConfig(level=logging.INFO)
 logging.info(f"OPENAI_KEY loaded: {OPENAI_KEY[:15] if OPENAI_KEY else 'EMPTY'}...")
@@ -152,6 +197,10 @@ Configuration.secret_key  = YOOKASSA_SECRET
 # ========== КЛИЕНТЫ AI ==========
 openai_client = AsyncOpenAI(api_key=OPENAI_KEY)
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+
+async def claude_messages_create(**kwargs):
+    """Не блокирует event loop во время синхронного запроса Anthropic."""
+    return await asyncio.to_thread(claude_client.messages.create, **kwargs)
 
 # ========== БОТ ==========
 # Бот с увеличенным таймаутом сессии (против Request timeout при постинге)
@@ -2056,7 +2105,7 @@ async def ask_claude(question: str, depth: str) -> str:
     depth_prompts = {
         "short":  "Отвечай кратко — 2-3 предложения. Простой язык.",
         "medium": "Отвечай развёрнуто — с цитатами из Священного Писания и учением Церкви.",
-        "deep":   "Отвечай глубоко и мудро — как опытный православный священник. Приведи цитаты из Писания и святых отцов. Заверши молитвенным пожеланием.",
+        "deep":   "Отвечай глубоко и вдумчиво. Приведи уместные цитаты из Писания и святых отцов. Заверши кратким молитвенным пожеланием.",
     }
     greetings = [
         "Душа моя", "Чадо", "Возлюбленное чадо", "Дорогой брат во Христе",
@@ -2065,18 +2114,20 @@ async def ask_claude(question: str, depth: str) -> str:
     ]
     greeting = random.choice(greetings)
     system = (
-        "Ты православный священник с многолетним опытом пастырского служения. "
-        "Отвечаешь на вопросы о вере тепло, по-отечески, как настоящий батюшка на исповеди или после службы. "
+        "Ты православный помощник. "
+        "Отвечаешь на вопросы о вере тепло, бережно и простым человеческим языком. "
         "Говоришь просто и сердечно — не сухо и не академично. "
         f"ОБЯЗАТЕЛЬНО начинай каждый ответ с обращения '{greeting},' — это первое слово ответа. "
         "Опираешься на Священное Писание, Предание, слова святых отцов — объясняешь живым языком. "
         "Никогда не осуждаешь, всегда утешаешь и ободряешь. "
-        "В конце ответа — краткое молитвенное пожелание или благословение. "
+        "Не представляйся священником и не заменяй личный разговор с духовником. "
+        "В вопросах Таинств и личного духовного руководства мягко советуй обратиться к священнику. "
+        "В конце ответа — краткое молитвенное пожелание. Не выдавай ответ за личное благословение священника. "
         "Отвечаешь только по-русски. "
         f"{depth_prompts.get(depth, depth_prompts['medium'])}"
     )
     try:
-        message = claude_client.messages.create(
+        message = await claude_messages_create(
             model="claude-sonnet-4-5",
             max_tokens=1000,
             system=system,
@@ -2163,36 +2214,36 @@ async def get_daily_saint() -> str:
         f"3-4 предложения. Начни с эмодзи ✝️. Пиши только по-русски."
     )
     try:
-        msg = claude_client.messages.create(
+        msg = await claude_messages_create(
             model="claude-sonnet-4-5",
             max_tokens=400,
-            system="Ты православный священник с многолетним опытом. Пишешь тепло и душевно.",
+            system="Ты православный помощник. Пишешь тепло, бережно и душевно. Не представляйся священником.",
             messages=[{"role": "user", "content": prompt}]
         )
-        return msg.content[0].text.strip() + "\n\n─────────────────\n☦️ Подробнее → @Moya\\_Vera\\_bot"
+        return msg.content[0].text.strip()
     except Exception as e:
         logging.error(f"get_daily_saint error: {e}")
         if saints:
             t = f"✝️ *{today}*\n\n"
             for name, desc in saints[:3]:
                 t += f"👼 {name} — {desc}\n"
-            return t + "\n─────────────────\n☦️ @Moya\\_Vera\\_bot"
-        return f"✝️ *{today}*\n\n─────────────────\n☦️ @Moya\\_Vera\\_bot"
+            return t
+        return f"✝️ *{today}*"
 
 async def get_daily_quote() -> str:
     today_str = date_ru("short")
     try:
-        msg = claude_client.messages.create(
+        msg = await claude_messages_create(
             model="claude-sonnet-4-5",
             max_tokens=300,
-            system="Ты православный священник. Пишешь тепло и душевно.",
+            system="Ты православный помощник. Пишешь тепло, бережно и душевно. Не представляйся священником.",
             messages=[{"role": "user", "content": (
                 f"Напиши пост для православного канала — мудрая цитата православного святого или старца "
                 f"с кратким пояснением (1-2 предложения). Сегодня {today_str}. "
                 f"Начни с эмодзи ✨. Формат: цитата в кавычках, автор, пояснение. Пиши только по-русски."
             )}]
         )
-        return msg.content[0].text.strip() + "\n\n─────────────────\n☦️ Молитвы и тексты → @Moya\\_Vera\\_bot"
+        return msg.content[0].text.strip()
     except Exception as e:
         logging.error(f"get_daily_quote error: {e}")
         import random
@@ -2202,7 +2253,7 @@ async def get_daily_quote() -> str:
             ("Терпение — корень всех добродетелей.", "Прп. Иоанн Лествичник"),
         ]
         text_q, author = random.choice(quotes)
-        return f"✨ *СЛОВО НА ДЕНЬ • {today_str}*\n\n«{text_q}»\n\n— *{author}*\n\n─────────────────\n☦️ @Moya\\_Vera\\_bot"
+        return f"✨ *СЛОВО НА ДЕНЬ • {today_str}*\n\n«{text_q}»\n\n— *{author}*"
 
 
 def get_fast_today() -> str:
@@ -2249,7 +2300,7 @@ def get_fast_today() -> str:
 async def get_daily_gospel() -> str:
     today = date_ru("short")
     try:
-        message = claude_client.messages.create(
+        message = await claude_messages_create(
             model="claude-sonnet-4-5",
             max_tokens=500,
             system=(
@@ -2264,9 +2315,7 @@ async def get_daily_gospel() -> str:
         gospel_text = message.content[0].text
         return (
             f"📖 *ЕВАНГЕЛИЕ ДНЯ • {today}*\n\n"
-            f"{gospel_text}\n\n"
-            f"─────────────────\n"
-            f"☦️ Читать Библию → @Moya\\_Vera\\_bot"
+            f"{gospel_text}"
         )
     except Exception as e:
         logging.error(f"Ошибка Евангелия дня: {e}")
@@ -2283,9 +2332,7 @@ async def get_daily_gospel() -> str:
         return (
             f"📖 *ЕВАНГЕЛИЕ ДНЯ • {today}*\n\n"
             f"«{text_q}»\n\n"
-            f"— {ref}\n\n"
-            f"─────────────────\n"
-            f"☦️ Читать Библию → @Moya\\_Vera\\_bot"
+            f"— {ref}"
         )
 
 SENT_LOG_FILE = "/root/vera_channel_sent.txt"
@@ -2314,178 +2361,120 @@ def _mark_sent(key):
         logging.error(f"Не удалось записать SENT_LOG: {e}")
 
 async def channel_post_loop():
-    """Автопостинг в ТГ канал по МСК. Тройная защита от повторов:
-       1) флаг в памяти, 2) флаг на диске (переживает перезапуск),
-       3) sleep после поста."""
+    """Автопостинг в Telegram-канал по московскому времени без дублей."""
     await asyncio.sleep(15)
-
-    # Расписание: (час МСК, тип контента)
-    schedule = [
-        (7,  "morning"),
-        (8,  "saint"),
-        (10, "gospel"),
-        (12, "quote"),
-        (20, "evening"),
-        # Еженедельные рубрики
-        (11, "film"),    # воскресенье
-        (11, "qa"),      # пятница
-        (11, "life"),    # суббота
-    ]
-
-    # При старте подгружаем что уже отправлено сегодня (защита от перезапуска)
     sent_today = _load_sent_today()
     logging.info(f"Канал ТГ: загружено отправленных сегодня: {len(sent_today)}")
 
+    daily_schedule = {7: "morning", 8: "saint", 10: "gospel", 12: "quote", 20: "evening"}
+
     while True:
         try:
-            now_utc = datetime.utcnow()
-            msk_hour = (now_utc.hour + 3) % 24
-            today = now_utc.strftime("%Y-%m-%d")
-            today_str = date_ru("short")
+            msk_now = datetime.utcnow() + timedelta(hours=3)
+            hour = msk_now.hour
+            today = msk_now.strftime("%Y-%m-%d")
+            today_str = f"{msk_now.day} {MONTHS_RU[msk_now.month]}"
 
-            # Сброс в полночь МСК (21:00 UTC) — через ключ, один раз
-            reset_key = f"{today}_reset"
-            if now_utc.hour == 21 and reset_key not in sent_today:
-                sent_today = {reset_key}  # очищаем память, оставляем только reset
-                _mark_sent(reset_key)
-                logging.info("Канал ТГ: новый день, флаги сброшены")
+            # В 11:00 только одна недельная рубрика по московскому дню недели.
+            ctype = daily_schedule.get(hour)
+            if hour == 11:
+                ctype = {4: "qa", 5: "life", 6: "film"}.get(msk_now.weekday())
 
-            for hour, ctype in schedule:
-                key = f"{today}_{hour}"
-                # Проверка: правильный час, первые 30 мин, не отправлено
-                if msk_hour == hour and now_utc.minute < 30 and key not in sent_today:
+            if ctype and msk_now.minute < 30:
+                key = f"{today}_{hour}_{ctype}"
+                if key not in sent_today:
                     logging.info(f"Канал ТГ {hour}:00 МСК — готовлю ({ctype})")
-
-                    # 1) Формируем текст поста
                     text = None
                     do_broadcast = False
                     try:
                         if ctype == "morning":
                             feast = get_todays_feast()
                             saints = get_todays_saints()
-                            context = ""
-                            if feast:
-                                context = f"Сегодня праздник: {feast}."
-                            elif saints:
-                                context = f"Сегодня память: {', '.join([s[0] for s in saints[:2]])}."
-                            prompt = (
-                                f"Напиши пост для православного канала — утренняя молитва или благословение на день. "
-                                f"Сегодня {today_str}. {context} "
-                                f"4-5 предложений. Начни с эмодзи 🌅. Пиши только по-русски. Без ссылок в конце."
+                            context = f"Сегодня праздник: {feast}." if feast else (
+                                f"Сегодня память: {', '.join([x[0] for x in saints[:2]])}." if saints else ""
                             )
-                            msg = claude_client.messages.create(
-                                model="claude-sonnet-4-5",
-                                max_tokens=400,
-                                system="Ты православный священник. Пишешь тепло и душевно.",
-                                messages=[{"role": "user", "content": prompt}]
+                            msg = await claude_messages_create(
+                                model="claude-sonnet-4-5", max_tokens=400,
+                                system="Ты православный помощник. Пишешь тепло, бережно и душевно. Не представляйся священником.",
+                                messages=[{"role": "user", "content": (
+                                    f"Напиши пост для православного канала — утренняя молитва или благословение на день. "
+                                    f"Сегодня {today_str}. {context} 4-5 предложений. Начни с эмодзи 🌅. "
+                                    "Пиши только по-русски. Без ссылок и рекламы в конце."
+                                )}]
                             )
-                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 Все молитвы → @Moya\\_Vera\\_bot"
+                            text = msg.content[0].text.strip()
                             do_broadcast = True
                         elif ctype == "saint":
                             text = await get_daily_saint()
-                        elif ctype == "nameday":
-                            saints = get_todays_saints()
-                            if saints:
-                                text = "👼 *Именинники " + today_str + "*\n\n"
-                                for sname, desc in saints:
-                                    text += "✨ *" + sname + "* — " + desc + "\n"
-                                text += "\n🎉 Поздравьте своих близких!\n\n"
-                                text += "─────────────────\n"
-                                text += "☦️ День ангела → @Moya\\_Vera\\_bot"
-                            else:
-                                # именинников нет — помечаем как обработанное, пропускаем
-                                sent_today.add(key)
-                                _mark_sent(key)
-                                continue
                         elif ctype == "gospel":
                             text = await get_daily_gospel()
                         elif ctype == "quote":
                             text = await get_daily_quote()
                         elif ctype == "evening":
-                            prompt = (
-                                f"Напиши пост для православного канала — вечерняя молитва или слова утешения на конец дня. "
-                                f"Сегодня {today_str}. "
-                                f"4-5 предложений. Начни с эмодзи 🌙. Пиши только по-русски. Без ссылок в конце."
-                            )
-                            msg = claude_client.messages.create(
-                                model="claude-sonnet-4-5",
-                                max_tokens=400,
-                                system="Ты православный священник. Пишешь тепло и душевно.",
-                                messages=[{"role": "user", "content": prompt}]
-                            )
-                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 Молитвослов → @Moya\\_Vera\\_bot"
-
-                        elif ctype == "film" and now_utc.weekday() == 6:  # воскресенье
-                            msg = claude_client.messages.create(
-                                model="claude-sonnet-4-5",
-                                max_tokens=500,
-                                system="Ты православный священник. Пишешь тепло и душевно.",
+                            msg = await claude_messages_create(
+                                model="claude-sonnet-4-5", max_tokens=400,
+                                system="Ты православный помощник. Пишешь тепло, бережно и душевно. Не представляйся священником.",
                                 messages=[{"role": "user", "content": (
-                                    f"Напиши пост для православного канала — рекомендация православного фильма или документального фильма о вере. "
-                                    f"Укажи название, год, краткое описание (2-3 предложения) и почему стоит посмотреть. "
-                                    f"Начни с эмодзи 📽️. Пиши только по-русски. Без ссылок в конце."
+                                    f"Напиши пост для православного канала — вечерняя молитва или слова утешения на конец дня. "
+                                    f"Сегодня {today_str}. 4-5 предложений. Начни с эмодзи 🌙. "
+                                    "Пиши только по-русски. Без ссылок и рекламы в конце."
                                 )}]
                             )
-                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 @Moya\\_Vera\\_bot"
-
-                        elif ctype == "qa" and now_utc.weekday() == 4:  # пятница
-                            msg = claude_client.messages.create(
-                                model="claude-sonnet-4-5",
-                                max_tokens=500,
-                                system="Ты православный священник с многолетним опытом. Отвечаешь тепло и понятно.",
+                            text = msg.content[0].text.strip()
+                        elif ctype == "qa":
+                            msg = await claude_messages_create(
+                                model="claude-sonnet-4-5", max_tokens=500,
+                                system="Ты православный помощник. Отвечаешь тепло, бережно и понятно. Не представляйся священником.",
                                 messages=[{"role": "user", "content": (
-                                    f"Напиши пост для православного канала в формате вопрос-ответ. "
-                                    f"Придумай частый вопрос о вере, молитве или таинствах который задают люди приходящие к вере. "
-                                    f"Дай развёрнутый тёплый ответ. Начни с эмодзи ❓. Пиши только по-русски. Без ссылок в конце."
+                                    "Напиши пост для православного канала в формате вопрос-ответ. "
+                                    "Выбери частый вопрос о вере, молитве или Таинствах и дай понятный тёплый ответ. "
+                                    "Начни с эмодзи ❓. Пиши только по-русски. Без ссылок и рекламы в конце."
                                 )}]
                             )
-                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 @Moya\\_Vera\\_bot"
-
-                        elif ctype == "life" and now_utc.weekday() == 5:  # суббота
-                            msg = claude_client.messages.create(
-                                model="claude-sonnet-4-5",
-                                max_tokens=600,
-                                system="Ты православный священник. Пишешь тепло и душевно.",
+                            text = msg.content[0].text.strip()
+                        elif ctype == "life":
+                            msg = await claude_messages_create(
+                                model="claude-sonnet-4-5", max_tokens=600,
+                                system="Ты православный помощник. Пишешь тепло, бережно и душевно. Не представляйся священником.",
                                 messages=[{"role": "user", "content": (
-                                    f"Напиши пост для православного канала — развёрнутое житие православного святого. "
-                                    f"Выбери интересного святого, расскажи его историю — подвиг, чудеса, значение для церкви. "
-                                    f"5-7 предложений. Начни с эмодзи 📖. Пиши только по-русски. Без ссылок в конце."
+                                    "Напиши для православного канала развёрнутое житие православного святого: "
+                                    "история, подвиг, чудеса и чему учит его пример. 5-7 предложений. "
+                                    "Начни с эмодзи 📖. Без ссылок и рекламы в конце."
                                 )}]
                             )
-                            text = msg.content[0].text.strip() + "\n\n─────────────────\n🙏 @Moya\\_Vera\\_bot"
-
-                        else:
-                            text = None  # не тот день недели для рубрики
+                            text = msg.content[0].text.strip()
+                        elif ctype == "film":
+                            msg = await claude_messages_create(
+                                model="claude-sonnet-4-5", max_tokens=500,
+                                system="Ты православный помощник. Пишешь тепло, бережно и душевно. Не представляйся священником.",
+                                messages=[{"role": "user", "content": (
+                                    "Порекомендуй для православного канала православный или документальный фильм о вере. "
+                                    "Укажи название, год, краткое описание и почему стоит посмотреть. "
+                                    "Начни с эмодзи 📽️. Без ссылок и рекламы в конце."
+                                )}]
+                            )
+                            text = msg.content[0].text.strip()
                     except Exception as e:
-                        logging.error(f"Канал ТГ: ошибка подготовки {hour}:00 — {e}")
-                        text = None
+                        logging.error(f"Канал ТГ: ошибка подготовки {ctype}: {e}")
 
-                    # 2) Отправляем с повторными попытками (до 3 раз)
                     if text:
+                        with_photo = ctype in {"saint", "life"}
                         ok = False
                         for attempt in range(1, 4):
-                            try:
-                                ok = await send_channel_post(text)
-                                if ok:
-                                    break
-                            except Exception as e:
-                                logging.error(f"Канал ТГ: попытка {attempt} не удалась — {e}")
+                            ok = await send_channel_post(text, ctype, with_photo=with_photo)
+                            if ok:
+                                break
+                            logging.error(f"Канал ТГ: попытка {attempt} не удалась")
                             await asyncio.sleep(10)
-
-                        # 3) Помечаем ТОЛЬКО если реально отправилось
                         if ok:
                             sent_today.add(key)
                             _mark_sent(key)
-                            logging.info(f"Канал ТГ {hour}:00 — отправлено успешно")
+                            logging.info(f"Канал ТГ {hour}:00 — отправлено успешно ({ctype})")
                             if do_broadcast:
                                 asyncio.create_task(morning_broadcast())
                             await asyncio.sleep(60)
-                        else:
-                            logging.error(f"Канал ТГ {hour}:00 — НЕ отправлено после 3 попыток, повтор через 30 сек")
-
         except Exception as e:
             logging.error(f"Канал ТГ: ошибка цикла — {e}")
-
         await asyncio.sleep(30)
 
 
@@ -2518,10 +2507,10 @@ async def get_prayer_of_day() -> str:
         "Пиши только по-русски."
     )
     try:
-        msg = claude_client.messages.create(
+        msg = await claude_messages_create(
             model="claude-sonnet-4-5",
             max_tokens=600,
-            system="Ты православный священник. Пишешь молитвы тепло и душевно.",
+            system="Ты православный помощник. Пишешь пример личного молитвенного обращения тепло и душевно. Не выдавай его за официальный богослужебный текст.",
             messages=[{"role": "user", "content": prompt}]
         )
         prayer = msg.content[0].text
@@ -2609,6 +2598,56 @@ async def cmd_start(message: Message):
     first_name = message.from_user.first_name or ""
     user = get_user(user_id, username, first_name)
     asyncio.create_task(asyncio.to_thread(sheets_add_user, user_id, username, first_name))
+
+    # Deep-link из канала: /start prayers, saints, gospel, question, evening, library.
+    parts = (message.text or "").split(maxsplit=1)
+    start_param = parts[1].strip().lower() if len(parts) > 1 else ""
+    deep_links = {
+        "prayers": (
+            "🙏 *Молитвы всегда под рукой*\n\nВыберите нужную молитву или откройте молитву дня.",
+            prayers_menu(),
+        ),
+        "saints": (
+            "👼 *Святые и небесный покровитель*\n\nНайдите святого по имени или посмотрите именинников дня.",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🔍 Найти святого по имени", callback_data="saint_search")],
+                [InlineKeyboardButton(text="👼 Именинники сегодня", callback_data="cal_namedays")],
+                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+            ]),
+        ),
+        "gospel": (
+            "📖 *Евангелие дня*\n\nОткройте сегодняшнее чтение и краткое объяснение.",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="📖 Читать Евангелие дня", callback_data="daily_gospel")],
+                [InlineKeyboardButton(text="📚 Открыть библиотеку", callback_data="library")],
+                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+            ]),
+        ),
+        "question": (
+            "❓ *Задайте свой вопрос о вере*\n\nВыберите глубину ответа и напишите вопрос текстом или голосом.",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="✍️ Задать вопрос", callback_data="ask_question")],
+                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+            ]),
+        ),
+        "evening": (
+            "🌙 *Вечерние молитвы*\n\nЗавершите день спокойно и сохраните нужную молитву в избранное.",
+            InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="🌙 Вечерняя молитва", callback_data="prayer_evening_ru")],
+                [InlineKeyboardButton(text="🙏 Все молитвы", callback_data="prayers")],
+                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+            ]),
+        ),
+        "library": (
+            "📚 *Православная библиотека*\n\nКниги, молитвослов, Псалтирь и материалы о вере.",
+            library_menu(),
+        ),
+        "menu": ("☦️ *Православный помощник «С верой»*", main_menu()),
+    }
+    if start_param in deep_links:
+        title, markup = deep_links[start_param]
+        await message.answer(title, parse_mode="Markdown", reply_markup=markup)
+        return
 
     if not user.get("onboarded"):
         await message.answer(
@@ -3474,7 +3513,7 @@ async def cb_patron_prayer(callback: CallbackQuery):
         saint_info += f" (день памяти: {angel})"
 
     try:
-        message = claude_client.messages.create(
+        message = await claude_messages_create(
             model="claude-sonnet-4-5",
             max_tokens=600,
             system=(
@@ -3922,6 +3961,10 @@ async def handle_voice(message: Message):
                 message.from_user.username or "",
                 message.from_user.first_name or "", text
             ))
+            try:
+                await bot.send_message(OWNER_ID, f"💬 Новый отзыв Telegram\n\nПользователь: {user_id}\n{text[:3000]}")
+            except Exception as e:
+                logging.error(f"Не удалось уведомить владельца об отзыве: {e}")
             set_step(user_id, "idle")
             await message.answer(
                 "☦️ *Спасибо за ваш отзыв!*\n\nДа хранит вас Господь 🕊️",
@@ -4099,11 +4142,11 @@ async def handle_text(message: Message):
         set_step(user_id, "idle")
         await message.answer("🙏 Молюсь... составляю молитву...")
         try:
-            msg = claude_client.messages.create(
+            msg = await claude_messages_create(
                 model="claude-sonnet-4-5",
                 max_tokens=600,
                 system=(
-                    "Ты православный священник. Составь личную молитву для человека "
+                    "Ты православный помощник. Составь пример личного молитвенного обращения для человека "
                     "на основе его имени и просьбы. Молитва должна быть тёплой, искренней, "
                     "3-5 строф. Обращайся к Господу или Богородице. Упомяни имя человека. "
                     "Заверши Аминь. Только по-русски."
@@ -4112,7 +4155,7 @@ async def handle_text(message: Message):
             )
             prayer_text = msg.content[0].text
             await message.answer(
-                f"🙏 *Молитва за тебя*\n\n{prayer_text}",
+                f"🙏 *Пример молитвенного обращения своими словами*\n\n{prayer_text}",
                 parse_mode="Markdown",
                 reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                     [InlineKeyboardButton(text="🙏 Ещё молитву", callback_data="prayer_for_me")],
@@ -4179,6 +4222,10 @@ async def handle_text(message: Message):
             message.from_user.first_name or "",
             text
         ))
+        try:
+            await bot.send_message(OWNER_ID, f"💬 Новый отзыв Telegram\n\nПользователь: {user_id}\n{text[:3000]}")
+        except Exception as e:
+            logging.error(f"Не удалось уведомить владельца об отзыве: {e}")
         set_step(user_id, "idle")
         await message.answer(
             "☦️ *Спасибо за ваш отзыв!*\n\n"
