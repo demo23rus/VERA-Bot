@@ -149,23 +149,63 @@ def sheets_update_activity_max(user_id):
     except Exception as e:
         logging.error(f"Sheets update_activity_max: {e}")
 
-def sheets_add_review_max(user_id, username, first_name, text):
+REVIEW_SHEET_HEADERS = [
+    "ID", "Username", "Имя", "Дата", "Отзыв",
+    "Номер отзыва", "Статус", "Ответ владельца", "Дата ответа", "Ответил"
+]
+
+
+def ensure_review_sheet(sp=None):
+    """Создаёт или обновляет лист отзывов до CRM-структуры."""
     try:
-        sp = get_spreadsheet()
-        if not sp: return
+        sp = sp or get_spreadsheet()
+        if not sp:
+            return None
         try:
             sheet = sp.worksheet("Отзывы MAX")
         except Exception:
-            sheet = sp.add_worksheet(title="Отзывы MAX", rows=1000, cols=5)
-            sheet.insert_row(["ID","Username","Имя","Дата","Отзыв"], 1)
+            sheet = sp.add_worksheet(
+                title="Отзывы MAX",
+                rows=1000,
+                cols=len(REVIEW_SHEET_HEADERS)
+            )
+        if getattr(sheet, "col_count", 0) < len(REVIEW_SHEET_HEADERS):
+            sheet.resize(cols=len(REVIEW_SHEET_HEADERS))
+        current_headers = sheet.row_values(1)
+        for index, header in enumerate(REVIEW_SHEET_HEADERS, start=1):
+            if len(current_headers) < index or current_headers[index - 1] != header:
+                sheet.update_cell(1, index, header)
+        return sheet
+    except Exception as e:
+        logging.error(f"ensure_review_sheet: {e}")
+        return None
+
+
+def ensure_review_sheet_schema():
+    """Подготавливает столбцы листа отзывов при запуске."""
+    ensure_review_sheet()
+
+
+def sheets_add_review_max(review_id, user_id, username, first_name, text):
+    try:
+        sp = get_spreadsheet()
+        if not sp:
+            return
+        sheet = ensure_review_sheet(sp)
+        if not sheet:
+            return
         sheet.append_row([
             str(user_id),
             f"@{username}" if username else "—",
             first_name or "—",
             datetime.now().strftime("%d.%m.%Y %H:%M"),
-            text
+            text,
+            str(review_id),
+            "Новый",
+            "—",
+            "—",
+            "—"
         ])
-        # Увеличиваем счётчик отзывов
         try:
             main_sheet = sp.worksheet("С верой MAX")
             col = main_sheet.col_values(1)
@@ -176,7 +216,72 @@ def sheets_add_review_max(user_id, username, first_name, text):
         except Exception:
             pass
     except Exception as e:
-        logging.error(f"Sheets add_review_max: {e}")
+        logging.error(f"sheets_add_review_max: {e}")
+
+
+def sheets_update_review_max(
+    review_id,
+    status,
+    reply_text="",
+    replied_at="",
+    handled_by="Владелец"
+):
+    """Обновляет статус ответа. Повторяет поиск, если append ещё выполняется."""
+    import time
+    for attempt in range(1, 6):
+        try:
+            sp = get_spreadsheet()
+            if not sp:
+                return
+            sheet = ensure_review_sheet(sp)
+            if not sheet:
+                return
+            review_ids = sheet.col_values(6)
+            review_id_str = str(review_id)
+            if review_id_str in review_ids:
+                row = review_ids.index(review_id_str) + 1
+                sheet.update_cell(row, 7, status)
+                sheet.update_cell(row, 8, reply_text or "—")
+                sheet.update_cell(row, 9, replied_at or "—")
+                sheet.update_cell(row, 10, handled_by or "Владелец")
+                return
+            if attempt < 5:
+                time.sleep(2)
+        except Exception as e:
+            logging.error(f"sheets_update_review_max attempt {attempt}: {e}")
+            if attempt < 5:
+                time.sleep(2)
+    logging.warning(f"Отзыв #{review_id} не найден в Google Sheets после повторов")
+
+
+def sheets_update_latest_review_by_user(
+    user_id,
+    status,
+    reply_text,
+    replied_at,
+    handled_by="Владелец"
+):
+    """Обновляет последний старый отзыв по ID пользователя, даже без номера отзыва."""
+    try:
+        sp = get_spreadsheet()
+        if not sp:
+            return
+        sheet = ensure_review_sheet(sp)
+        if not sheet:
+            return
+        user_ids = sheet.col_values(1)
+        target = str(user_id)
+        matching_rows = [i + 1 for i, value in enumerate(user_ids) if value == target]
+        if not matching_rows:
+            logging.warning(f"Отзывы пользователя {user_id} не найдены в Google Sheets")
+            return
+        row = matching_rows[-1]
+        sheet.update_cell(row, 7, status)
+        sheet.update_cell(row, 8, reply_text or "—")
+        sheet.update_cell(row, 9, replied_at or "—")
+        sheet.update_cell(row, 10, handled_by or "Владелец")
+    except Exception as e:
+        logging.error(f"sheets_update_latest_review_by_user: {e}")
 
 def sheets_add_donation(user_id, username, first_name, amount, source="MAX"):
     """Записывает пожертвование в общий лист Пожертвования"""
@@ -581,6 +686,21 @@ def init_db():
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_channel_clicks_source ON channel_clicks(source)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_channel_posts_date ON channel_posts(post_date)")
+    # Отзывы и ответы владельца.
+    c.execute("""CREATE TABLE IF NOT EXISTS user_reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        chat_id INTEGER NOT NULL,
+        username TEXT DEFAULT '',
+        first_name TEXT DEFAULT '',
+        review_text TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'new',
+        owner_reply TEXT DEFAULT '',
+        created_at TEXT NOT NULL,
+        replied_at TEXT DEFAULT '',
+        handled_by TEXT DEFAULT ''
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_user_reviews_status ON user_reviews(status)")
     conn.commit()
     conn.close()
 
@@ -619,6 +739,60 @@ def get_favorites(user_id):
     rows = c.fetchall()
     conn.close()
     return rows
+
+
+def create_review_record(chat_id, user_id, username, first_name, review_text):
+    """Сохраняет отзыв локально и возвращает его уникальный номер."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO user_reviews
+           (user_id, chat_id, username, first_name, review_text, status, created_at)
+           VALUES (?, ?, ?, ?, ?, 'new', ?)""",
+        (
+            int(user_id),
+            int(chat_id),
+            username or "",
+            first_name or "",
+            review_text.strip(),
+            datetime.now().isoformat(timespec="seconds")
+        )
+    )
+    review_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return review_id
+
+
+def get_review_record(review_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT * FROM user_reviews WHERE id=?",
+        (int(review_id),)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_review_record(review_id, status, owner_reply="", handled_by="Владелец"):
+    replied_at = datetime.now().isoformat(timespec="seconds")
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        """UPDATE user_reviews
+           SET status=?, owner_reply=?, replied_at=?, handled_by=?
+           WHERE id=?""",
+        (
+            status,
+            owner_reply.strip(),
+            replied_at,
+            handled_by,
+            int(review_id)
+        )
+    )
+    conn.commit()
+    conn.close()
+    return replied_at
 
 # ========== AI ==========
 async def ask_claude(question, depth="medium"):
@@ -1037,6 +1211,69 @@ async def handle_start(chat_id, user_id, first_name, username, start_payload="")
         )
 
 async def handle_callback(chat_id, user_id, payload, first_name=""):
+    # Служебные действия владельца по отзывам.
+    if payload.startswith("owner_review_reply:"):
+        if int(user_id) != int(OWNER_ID):
+            await send_message(chat_id, "⛔ Эта команда доступна только владельцу проекта.")
+            return
+        try:
+            review_id = int(payload.split(":", 1)[1])
+        except (ValueError, IndexError):
+            await send_message(chat_id, "⚠️ Не удалось определить номер отзыва.")
+            return
+        review = get_review_record(review_id)
+        if not review:
+            await send_message(chat_id, f"⚠️ Отзыв #{review_id} не найден.")
+            return
+        get_user(user_id, first_name=first_name)
+        set_step(user_id, f"owner_review_reply:{review_id}")
+        await send_message(
+            chat_id,
+            f"✍️ Ответ на отзыв #{review_id}\n\n"
+            f"Пользователь: {review.get('first_name') or '—'}\n"
+            f"Отзыв: {review.get('review_text', '')[:1800]}\n\n"
+            "Напишите ответ одним сообщением. Бот отправит его пользователю от имени проекта «С верой».",
+            [[btn("❌ Отменить", "owner_review_cancel")]]
+        )
+        return
+
+    if payload.startswith("owner_review_done:"):
+        if int(user_id) != int(OWNER_ID):
+            await send_message(chat_id, "⛔ Эта команда доступна только владельцу проекта.")
+            return
+        try:
+            review_id = int(payload.split(":", 1)[1])
+        except (ValueError, IndexError):
+            await send_message(chat_id, "⚠️ Не удалось определить номер отзыва.")
+            return
+        review = get_review_record(review_id)
+        if not review:
+            await send_message(chat_id, f"⚠️ Отзыв #{review_id} не найден.")
+            return
+        replied_at = update_review_record(
+            review_id,
+            "processed",
+            "",
+            first_name or "Владелец"
+        )
+        asyncio.create_task(asyncio.to_thread(
+            sheets_update_review_max,
+            review_id,
+            "Обработано",
+            "",
+            datetime.fromisoformat(replied_at).strftime("%d.%m.%Y %H:%M"),
+            first_name or "Владелец"
+        ))
+        await send_message(chat_id, f"✅ Отзыв #{review_id} отмечен как обработанный.")
+        return
+
+    if payload == "owner_review_cancel":
+        if int(user_id) == int(OWNER_ID):
+            get_user(user_id, first_name=first_name)
+            set_step(user_id, "idle")
+            await send_message(chat_id, "Отправка ответа отменена.")
+        return
+
     if payload == "main_menu":
         await send_message(chat_id, "☦️ Главное меню:", main_menu_buttons())
 
@@ -1420,6 +1657,108 @@ async def handle_text(chat_id, user_id, text, first_name=""):
         await handle_start(chat_id, user_id, first_name, "")
         return
 
+    # Ручной ответ по MAX ID — нужен и для отзывов, оставленных до обновления.
+    # Формат: /reply 150083051 Текст ответа пользователю
+    if int(user_id) == int(OWNER_ID) and text.strip().lower().startswith("/reply "):
+        parts = text.strip().split(maxsplit=2)
+        if len(parts) < 3:
+            await send_message(
+                chat_id,
+                "Формат команды:\n/reply ID_ПОЛЬЗОВАТЕЛЯ текст ответа"
+            )
+            return
+        try:
+            target_user_id = int(parts[1])
+        except ValueError:
+            await send_message(chat_id, "⚠️ ID пользователя должен состоять из цифр.")
+            return
+        reply_text = parts[2].strip()
+        result = await send_message(
+            target_user_id,
+            "☦️ Ответ команды проекта «С верой»\n\n"
+            f"{reply_text[:3500]}\n\n"
+            "Спасибо, что помогаете нам делать православного помощника лучше 🕊️",
+            [[btn("💬 Написать ещё", "review"), btn("🏠 Главное меню", "main_menu")]]
+        )
+        if not result or result.get("error") or result.get("error_code"):
+            await send_message(chat_id, "⚠️ MAX не подтвердил отправку ответа пользователю.")
+            return
+        replied_at_sheet = datetime.now().strftime("%d.%m.%Y %H:%M")
+        asyncio.create_task(asyncio.to_thread(
+            sheets_update_latest_review_by_user,
+            target_user_id,
+            "Отвечено",
+            reply_text,
+            replied_at_sheet,
+            first_name or "Владелец"
+        ))
+        await send_message(
+            chat_id,
+            f"✅ Ответ пользователю {target_user_id} отправлен.\n"
+            "Последний его отзыв в таблице будет отмечен как «Отвечено»."
+        )
+        return
+
+    # Ответ владельца на конкретный отзыв.
+    if int(user_id) == int(OWNER_ID) and step.startswith("owner_review_reply:"):
+        try:
+            review_id = int(step.split(":", 1)[1])
+        except (ValueError, IndexError):
+            set_step(user_id, "idle")
+            await send_message(
+                chat_id,
+                "⚠️ Не удалось определить отзыв. Нажмите «Ответить» ещё раз."
+            )
+            return
+        review = get_review_record(review_id)
+        if not review:
+            set_step(user_id, "idle")
+            await send_message(chat_id, f"⚠️ Отзыв #{review_id} не найден.")
+            return
+        reply_text = text.strip()
+        if not reply_text:
+            await send_message(chat_id, "⚠️ Ответ не может быть пустым.")
+            return
+        user_message = (
+            "☦️ Ответ команды проекта «С верой»\n\n"
+            f"{reply_text[:3500]}\n\n"
+            "Спасибо, что помогаете нам делать православного помощника лучше 🕊️"
+        )
+        result = await send_message(
+            review["chat_id"],
+            user_message,
+            [[btn("💬 Написать ещё", "review"), btn("🏠 Главное меню", "main_menu")]]
+        )
+        if not result or result.get("error") or result.get("error_code"):
+            await send_message(
+                chat_id,
+                "⚠️ MAX не подтвердил отправку. Ответ не отмечен как отправленный. Попробуйте ещё раз позже."
+            )
+            return
+        set_step(user_id, "idle")
+        replied_at = update_review_record(
+            review_id,
+            "answered",
+            reply_text,
+            first_name or "Владелец"
+        )
+        replied_at_sheet = datetime.fromisoformat(replied_at).strftime("%d.%m.%Y %H:%M")
+        asyncio.create_task(asyncio.to_thread(
+            sheets_update_review_max,
+            review_id,
+            "Отвечено",
+            reply_text,
+            replied_at_sheet,
+            first_name or "Владелец"
+        ))
+        await send_message(
+            chat_id,
+            f"✅ Ответ на отзыв #{review_id} отправлен пользователю.\n\n"
+            f"Пользователь: {review.get('first_name') or review.get('user_id')}\n"
+            "Статус в Google Таблице будет изменён на «Отвечено»."
+        )
+        return
+
     if step == "edit_name":
         name = text.strip()
         conn = sqlite3.connect(DB_PATH)
@@ -1541,32 +1880,64 @@ async def handle_text(chat_id, user_id, text, first_name=""):
 
     if step == "review":
         set_step(user_id, "idle")
+        review_text = text.strip()
+        if not review_text:
+            await send_message(
+                chat_id,
+                "⚠️ Отзыв не может быть пустым. Напишите текст сообщения.",
+                back_main()
+            )
+            return
         user_data = get_user(user_id)
         username = user_data.get("username", "")
-        saved_name = user_data.get("church_name") or user_data.get("first_name") or first_name
+        saved_name = (
+            user_data.get("church_name")
+            or user_data.get("first_name")
+            or first_name
+        )
 
-        # Сохраняем отзыв в Google Sheets в отдельном потоке, чтобы не блокировать webhook
-        import threading
-        threading.Thread(
-            target=sheets_add_review_max,
-            args=(user_id, username, saved_name, text.strip()),
-            daemon=True
-        ).start()
+        # Локальный номер связывает уведомление владельца, ответ и строку Sheets.
+        review_id = create_review_record(
+            chat_id,
+            user_id,
+            username,
+            saved_name,
+            review_text
+        )
 
-        # Дублируем отзыв владельцу проекта, чтобы обратная связь не потерялась
+        # Google Sheets обновляется в фоне и не блокирует webhook.
+        asyncio.create_task(asyncio.to_thread(
+            sheets_add_review_max,
+            review_id,
+            user_id,
+            username,
+            saved_name,
+            review_text
+        ))
+
         try:
             owner_text = (
-                "💬 Новый отзыв в «С верой» MAX\n\n"
+                f"💬 Новый отзыв #{review_id} в «С верой» MAX\n\n"
                 f"Пользователь: {saved_name or '—'}\n"
                 f"ID: {user_id}\n\n"
-                f"{text.strip()[:3000]}"
+                f"{review_text[:2800]}"
             )
-            await max_request("POST", f"messages?chat_id={OWNER_ID}", {"text": owner_text})
+            await send_message(
+                OWNER_ID,
+                owner_text,
+                [
+                    [btn("✍️ Ответить пользователю", f"owner_review_reply:{review_id}")],
+                    [btn("✅ Отметить обработанным", f"owner_review_done:{review_id}")]
+                ]
+            )
         except Exception as e:
             logging.error(f"Ошибка отправки отзыва владельцу: {e}")
 
-        await send_message(chat_id,
-            "☦️ Спасибо за ваш отзыв!\n\nМы сохранили его и обязательно учтём при развитии проекта.\nДа хранит вас Господь 🕊️",
+        await send_message(
+            chat_id,
+            "☦️ Спасибо за ваш отзыв!\n\n"
+            "Мы сохранили его. Если потребуется уточнение или ответ, команда проекта напишет вам прямо здесь, в MAX.\n\n"
+            "Да хранит вас Господь 🕊️",
             main_menu_buttons()
         )
         return
@@ -2182,6 +2553,7 @@ app = FastAPI()
 async def startup():
     init_db()
     await register_webhook()
+    asyncio.create_task(asyncio.to_thread(ensure_review_sheet_schema))
     asyncio.create_task(channel_scheduler())
     asyncio.create_task(angel_reminder_loop_max())
     logging.info("Vera MAX Bot запущен!")
@@ -2258,9 +2630,24 @@ async def webhook(request: Request):
                                 await send_message(chat_id, "⚠️ Не удалось распознать голосовое. Попробуйте написать текстом.",
                                     [[btn("🏠 Меню", "main_menu")]])
                             return JSONResponse({"ok": True})
+                        elif step == "review":
+                            await send_message(chat_id, "🎤 Распознаю ваш отзыв...")
+                            recognized = await transcribe_voice_max(audio_url)
+                            if recognized:
+                                await handle_text(chat_id, user_id, recognized, first_name)
+                            else:
+                                await send_message(
+                                    chat_id,
+                                    "⚠️ Не удалось распознать голосовое. Попробуйте ещё раз или напишите текстом.",
+                                    [[btn("◀️ Главное меню", "main_menu")]]
+                                )
+                            return JSONResponse({"ok": True})
                         else:
-                            await send_message(chat_id, "☦️ Голосовые работают только при вводе вопроса о вере. Нажмите Задать вопрос в меню.",
-                                main_menu_buttons())
+                            await send_message(
+                                chat_id,
+                                "☦️ Голосовые работают при вводе вопроса о вере или при отправке отзыва.",
+                                main_menu_buttons()
+                            )
                             return JSONResponse({"ok": True})
 
             text = body.get("text", "").strip()
