@@ -928,11 +928,33 @@ LIBRARY_TEXTS = {
 }
 
 # ========== ОБРАБОТЧИКИ ==========
-async def handle_start(chat_id, user_id, first_name, username):
+async def handle_start(chat_id, user_id, first_name, username, start_payload=""):
+    """Обрабатывает обычный запуск и запуск по MAX deep-link.
+
+    При наличии start_payload пользователь сразу попадает в обещанный раздел,
+    а не в общее меню. Формат ссылки: https://max.ru/<bot>?start=<payload>
+    """
     user = get_user(user_id, username, first_name)
     # Записываем в Sheets (в фоне)
     import threading
     threading.Thread(target=sheets_add_user_max, args=(user_id, username, first_name), daemon=True).start()
+
+    if not user.get("onboarded"):
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute("UPDATE users SET onboarded=1 WHERE user_id=?", (user_id,))
+        conn.commit()
+        conn.close()
+
+    # Разрешаем только известные сценарии, чтобы произвольный payload не ломал бот.
+    allowed_payloads = {
+        "prayers", "saints", "daily_gospel", "ask_question",
+        "prayer_evening_ru", "library", "photo_icon", "find_church",
+        "sacraments", "calendar", "main_menu",
+    }
+    if start_payload in allowed_payloads:
+        await handle_callback(chat_id, user_id, start_payload, first_name)
+        return
+
     if not user.get("onboarded"):
         await send_message(chat_id,
             "☦️ Добро пожаловать в «С верой»!\n\n"
@@ -948,10 +970,6 @@ async def handle_start(chat_id, user_id, first_name, username):
             "Чем могу помочь? ☦️",
             main_menu_buttons()
         )
-        conn = sqlite3.connect(DB_PATH)
-        conn.execute("UPDATE users SET onboarded=1 WHERE user_id=?", (user_id,))
-        conn.commit()
-        conn.close()
     else:
         name = user.get("church_name") or first_name
         await send_message(chat_id,
@@ -1723,7 +1741,7 @@ async def angel_reminder_loop_max():
 
 # ========== АВТОПОСТИНГ В КАНАЛ ==========
 MAX_CHANNEL_ID = -75405929805299
-MAX_BOT_URL = "https://max.ru/id232007136009_bot"
+MAX_BOT_URL = "https://max.ru/id232007136009_1_bot"
 
 
 # Иконы для главных праздников (Wikimedia Commons — свободные изображения)
@@ -1812,60 +1830,114 @@ CHANNEL_CTA = {
     "morning": {
         "footer": "🙏 Начните день с молитвы — в помощнике собраны утренние молитвы и молитва дня.",
         "button": "🙏 Открыть молитвы",
+        "payload": "prayers",
     },
     "quote": {
         "footer": "❓ Хотите лучше понять эту мысль? Задайте свой вопрос о вере православному помощнику.",
         "button": "❓ Задать вопрос о вере",
+        "payload": "ask_question",
     },
     "saint": {
         "footer": "👼 Узнайте о своём небесном покровителе и найдите день ангела в православном помощнике.",
         "button": "👼 Найти святого покровителя",
+        "payload": "saints",
     },
     "guidance": {
         "footer": "🕊️ Нужны поддержка или понятное объяснение? Обратитесь к православному помощнику.",
         "button": "🕊️ Получить поддержку",
+        "payload": "ask_question",
     },
     "saint_story": {
         "footer": "📸 Есть икона, о которой хочется узнать больше? Отправьте фотографию помощнику.",
         "button": "📸 Узнать икону по фото",
+        "payload": "photo_icon",
     },
     "evening": {
         "footer": "🌙 Завершите день спокойно — откройте вечерние молитвы и сохраните нужную в избранное.",
         "button": "🌙 Открыть вечерние молитвы",
+        "payload": "prayer_evening_ru",
     },
     "qa": {
         "footer": "✍️ Остался свой вопрос? Напишите его православному помощнику и выберите краткий или подробный ответ.",
         "button": "✍️ Задать свой вопрос",
+        "payload": "ask_question",
     },
     "weekly_life": {
         "footer": "👼 Найдите святого по имени и узнайте, когда совершается его память.",
         "button": "👼 Найти святого по имени",
+        "payload": "saints",
     },
     "film": {
         "footer": "📚 В православном помощнике есть книги, молитвы и полезные материалы для тех, кто хочет узнать больше.",
         "button": "📚 Открыть библиотеку",
+        "payload": "library",
     },
     "default": {
         "footer": "☦️ Молитвы, календарь, вопросы о вере и полезные материалы — в православном помощнике «С верой».",
         "button": "☦️ Открыть помощника",
+        "payload": "main_menu",
     },
 }
 
 
 def get_channel_cta(cta_key: str):
-    """Возвращает тематический текст и ссылочную кнопку для поста канала."""
+    """Возвращает тематический текст и deep-link кнопку для поста канала."""
     cta = CHANNEL_CTA.get(cta_key, CHANNEL_CTA["default"])
     footer = "\n\n─────────────────\n" + cta["footer"]
-    buttons = [[link_btn(cta["button"], MAX_BOT_URL)]]
-    return footer, buttons
+    deep_link = f"{MAX_BOT_URL}?start={cta['payload']}"
+    buttons = [[link_btn(cta["button"], deep_link)]]
+    return footer, buttons, deep_link
 
 
-async def post_to_channel(text, photo_url=None, buttons=None):
-    """Отправляет пост в канал с необязательными фото и кнопкой-ссылкой.
+def _extract_upload_token(payload):
+    """Извлекает токен изображения из разных вариантов ответа MAX upload API."""
+    if not isinstance(payload, dict):
+        return ""
+    if payload.get("token"):
+        return str(payload["token"])
+    for key in ("photo", "image", "file", "payload"):
+        nested = payload.get(key)
+        if isinstance(nested, dict) and nested.get("token"):
+            return str(nested["token"])
+    photos = payload.get("photos")
+    if isinstance(photos, dict):
+        for item in photos.values():
+            if isinstance(item, dict) and item.get("token"):
+                return str(item["token"])
+    if isinstance(photos, list):
+        for item in photos:
+            if isinstance(item, dict) and item.get("token"):
+                return str(item["token"])
+    return ""
 
-    Если загрузка изображения не удалась, публикация всё равно отправляется
-    с текстом и кнопкой. Если MAX отклонит клавиатуру, выполняется последний
-    резервный вызов с текстом и прямой ссылкой.
+
+def _max_response_ok(payload):
+    """Проверяет, что MAX подтвердил создание сообщения, а не вернул ошибку."""
+    if not isinstance(payload, dict) or not payload:
+        return False
+    raw = str(payload).lower()
+    if "error" in payload or "errors" in payload or "attachment.not.ready" in raw:
+        return False
+    return bool(
+        payload.get("message")
+        or payload.get("body")
+        or payload.get("timestamp")
+        or payload.get("message_id")
+        or payload.get("success") is True
+    )
+
+
+def _attachment_not_ready(payload):
+    return "attachment.not.ready" in str(payload).lower()
+
+
+async def post_to_channel(text, photo_url=None, buttons=None, deep_link=None):
+    """Отправляет пост в канал с фото и тематической deep-link кнопкой.
+
+    Изображение загружается в MAX как multipart/form-data в поле ``data``.
+    После загрузки выполняются повторы отправки, пока вложение обрабатывается.
+    При любой ошибке фото публикация сохраняется: сначала с кнопкой без фото,
+    затем, если клавиатура отклонена, с прямой deep-link ссылкой в тексте.
     """
     keyboard_attachment = None
     if buttons:
@@ -1874,66 +1946,90 @@ async def post_to_channel(text, photo_url=None, buttons=None):
             "payload": {"buttons": buttons},
         }
 
-    try:
-        if photo_url:
-            async with httpx.AsyncClient(timeout=30) as client:
+    if photo_url:
+        try:
+            timeout = httpx.Timeout(45.0, connect=20.0)
+            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
                 meta = await client.post(
                     f"{MAX_API}/uploads?type=image",
                     headers={"Authorization": MAX_TOKEN},
                 )
+                meta.raise_for_status()
                 meta_data = meta.json()
                 upload_url = meta_data.get("url")
-                if upload_url:
-                    img = await client.get(photo_url)
-                    if img.status_code == 200:
-                        uploaded = await client.post(
-                            upload_url,
-                            content=img.content,
-                            headers={"Content-Type": "image/jpeg"},
+                if not upload_url:
+                    raise RuntimeError(f"MAX не вернул upload_url: {meta_data}")
+
+                img = await client.get(photo_url)
+                img.raise_for_status()
+                if len(img.content) < 500:
+                    raise RuntimeError("Скачанное изображение слишком маленькое")
+
+                content_type = img.headers.get("content-type", "image/jpeg").split(";")[0]
+                if not content_type.startswith("image/"):
+                    content_type = "image/jpeg"
+                extension = "png" if "png" in content_type else "jpg"
+                files = {
+                    "data": (f"channel_icon.{extension}", img.content, content_type)
+                }
+                uploaded = await client.post(upload_url, files=files)
+                uploaded.raise_for_status()
+                upload_result = uploaded.json()
+                token = _extract_upload_token(upload_result)
+                if not token:
+                    raise RuntimeError(f"MAX не вернул токен изображения: {upload_result}")
+
+                attachments = [{"type": "image", "payload": {"token": token}}]
+                if keyboard_attachment:
+                    attachments.append(keyboard_attachment)
+                payload = {"text": text[:4000], "attachments": attachments}
+
+                # MAX может некоторое время обрабатывать загруженное вложение.
+                # Повторяем только ошибку attachment.not.ready.
+                for attempt, delay in enumerate((1, 2, 4, 7), start=1):
+                    if attempt > 1:
+                        await asyncio.sleep(delay)
+                    result = await max_request(
+                        "POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload
+                    )
+                    if _max_response_ok(result):
+                        logging.info(
+                            f"Канал: пост с фото и deep-link CTA отправлен, попытка {attempt}"
                         )
-                        upload_result = uploaded.json()
-                        token = upload_result.get("token", "")
-                        if token:
-                            attachments = [
-                                {"type": "image", "payload": {"token": token}}
-                            ]
-                            if keyboard_attachment:
-                                attachments.append(keyboard_attachment)
-                            payload = {"text": text, "attachments": attachments}
-                            result = await max_request(
-                                "POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload
-                            )
-                            if result:
-                                logging.info("Канал: пост с фото и CTA отправлен")
-                                return
-                        logging.error(f"Нет токена в ответе: {upload_result}")
-                else:
-                    logging.error(f"Нет upload_url в ответе: {meta_data}")
+                        return True
+                    if _attachment_not_ready(result):
+                        logging.warning(
+                            f"Канал: изображение ещё обрабатывается, попытка {attempt}: {result}"
+                        )
+                        continue
+                    logging.error(f"Канал: MAX отклонил пост с фото: {result}")
+                    break
+        except Exception as e:
+            logging.error(f"Канал: фото не отправлено, использую текстовый fallback: {e}")
 
-        attachments = [keyboard_attachment] if keyboard_attachment else None
-        payload = {"text": text}
-        if attachments:
-            payload["attachments"] = attachments
-        result = await max_request(
-            "POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload
-        )
-        if result:
-            logging.info("Канал: пост с CTA отправлен без фото")
-            return
+    # Первый fallback: текст + та же кликабельная deep-link кнопка.
+    payload = {"text": text[:4000]}
+    if keyboard_attachment:
+        payload["attachments"] = [keyboard_attachment]
+    result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload)
+    if _max_response_ok(result):
+        logging.info("Канал: пост с deep-link CTA отправлен без фото")
+        return True
 
-        raise RuntimeError("MAX API не подтвердил отправку поста с CTA")
-    except Exception as e:
-        logging.error(f"Канал: ошибка отправки с кнопкой: {e}")
-        try:
-            fallback_text = text + f"\n\nОткрыть помощника: {MAX_BOT_URL}"
-            await max_request(
-                "POST",
-                f"messages?chat_id={MAX_CHANNEL_ID}",
-                {"text": fallback_text[:4000]},
-            )
-            logging.info("Канал: отправлен резервный пост с прямой ссылкой")
-        except Exception as fallback_error:
-            logging.error(f"Канал: резервная отправка не удалась: {fallback_error}")
+    # Последний fallback: текст + видимая deep-link ссылка.
+    fallback_url = deep_link or MAX_BOT_URL
+    fallback_text = (text + f"\n\nОткрыть нужный раздел: {fallback_url}")[:4000]
+    fallback_result = await max_request(
+        "POST", f"messages?chat_id={MAX_CHANNEL_ID}", {"text": fallback_text}
+    )
+    if _max_response_ok(fallback_result):
+        logging.info("Канал: отправлен резервный пост с прямой deep-link ссылкой")
+        return True
+
+    logging.error(
+        f"Канал: публикация не отправлена. CTA={result}; fallback={fallback_result}"
+    )
+    return False
 
 
 async def generate_channel_post(prompt, cta_key="default"):
@@ -1950,11 +2046,11 @@ async def generate_channel_post(prompt, cta_key="default"):
             messages=[{"role": "user", "content": prompt}],
         )
         text = msg.content[0].text.strip()
-        footer, buttons = get_channel_cta(cta_key)
-        return text + footer, buttons
+        footer, buttons, deep_link = get_channel_cta(cta_key)
+        return text + footer, buttons, deep_link
     except Exception as e:
         logging.error(f"Ошибка генерации поста: {e}")
-        return None, None
+        return None, None, None
 
 
 async def channel_scheduler():
@@ -2045,15 +2141,15 @@ async def channel_scheduler():
                             "Напиши короткий пост для православного канала — полезное духовное напоминание на сегодня. "
                             "Начни с эмодзи 📅."
                         )
-                    post_text, buttons = await generate_channel_post(
+                    post_text, buttons, deep_link = await generate_channel_post(
                         dynamic_prompt, cta_key
                     )
                 else:
-                    post_text, buttons = await generate_channel_post(prompt, cta_key)
+                    post_text, buttons, deep_link = await generate_channel_post(prompt, cta_key)
 
                 if post_text:
                     photo_url = get_icon_for_today() if name == "память святого" else None
-                    await post_to_channel(post_text, photo_url, buttons)
+                    await post_to_channel(post_text, photo_url, buttons, deep_link)
                     if hour == 7:
                         asyncio.create_task(morning_broadcast_max())
                 await asyncio.sleep(60)
@@ -2091,12 +2187,12 @@ async def channel_scheduler():
             if key not in sent_today:
                 sent_today.add(key)
                 logging.info(f"Канал МСК 11:00 — {weekly_name}")
-                post_text, buttons = await generate_channel_post(
+                post_text, buttons, deep_link = await generate_channel_post(
                     weekly_prompt, weekly_cta
                 )
                 if post_text:
                     photo_url = get_icon_for_today() if weekly_name == "житие недели" else None
-                    await post_to_channel(post_text, photo_url, buttons)
+                    await post_to_channel(post_text, photo_url, buttons, deep_link)
                 await asyncio.sleep(60)
 
         await asyncio.sleep(30)
@@ -2198,8 +2294,16 @@ async def webhook(request: Request):
             chat_id = data.get("chat_id") or user.get("user_id")
             user_id = user.get("user_id", 0)
             first_name = user.get("name", "друг")
-            logging.info(f"BOT_STARTED: chat_id={chat_id} user_id={user_id}")
-            await handle_start(chat_id, user_id, first_name, "")
+            start_payload = str(
+                data.get("payload")
+                or data.get("start_payload")
+                or data.get("message", {}).get("body", {}).get("payload")
+                or ""
+            ).strip()
+            logging.info(
+                f"BOT_STARTED: chat_id={chat_id} user_id={user_id} payload={start_payload}"
+            )
+            await handle_start(chat_id, user_id, first_name, "", start_payload)
 
         elif update_type == "message_callback":
             cb = data.get("callback", {})
