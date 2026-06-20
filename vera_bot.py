@@ -25,7 +25,10 @@ from datetime import datetime, timedelta, date
 from openai import AsyncOpenAI
 import anthropic
 from aiogram import Bot, Dispatcher, F
-from aiogram.types import Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    Message, CallbackQuery, InlineKeyboardMarkup, InlineKeyboardButton,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove, BufferedInputFile,
+)
 from aiogram.filters import Command
 from aiogram.fsm.storage.memory import MemoryStorage
 from yookassa import Configuration, Payment
@@ -110,74 +113,139 @@ FEAST_ICONS_TG = {
     "08.10": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/Sergius_icon.jpg/800px-Sergius_icon.jpg",
 }
 
-def get_channel_icon() -> str:
-    """Возвращает икону для поста канала — праздничную или по числу месяца"""
-    today_key = datetime.now().strftime("%d.%m")
-    day_num = datetime.now().day
-    return FEAST_ICONS_TG.get(today_key) or DAILY_ICONS_TG.get(day_num, DAILY_ICONS_TG[1])
+def get_channel_icon(msk_now: datetime = None) -> str:
+    """Возвращает икону по московской дате — праздничную или по числу месяца."""
+    msk_now = msk_now or (datetime.utcnow() + timedelta(hours=3))
+    today_key = msk_now.strftime("%d.%m")
+    return FEAST_ICONS_TG.get(today_key) or DAILY_ICONS_TG.get(msk_now.day, DAILY_ICONS_TG[1])
 
-BOT_DEEP_LINKS = {
-    "morning":  ("🙏 Открыть молитвы", "prayers"),
-    "saint":    ("👼 Найти святого покровителя", "saints"),
-    "gospel":   ("📖 Открыть Евангелие дня", "gospel"),
-    "quote":    ("❓ Задать вопрос о вере", "question"),
-    "evening":  ("🌙 Открыть вечерние молитвы", "evening"),
-    "qa":       ("✍️ Задать свой вопрос", "question"),
-    "life":     ("👼 Найти святого по имени", "saints"),
-    "film":     ("📚 Открыть библиотеку", "library"),
+
+# CTA канала. Третий элемент — уникальный источник для аналитики воронки.
+CHANNEL_CTA = {
+    "morning": ("🙏 Начните день с молитвы — откройте молитву дня и утреннее правило.", "🙏 Открыть молитвы", "ch_morning"),
+    "quote": ("❓ Хотите понять эту мысль глубже? Задайте вопрос православному помощнику.", "❓ Задать вопрос", "ch_quote"),
+    "saint": ("👼 Найдите своего небесного покровителя и узнайте дни его памяти.", "👼 Найти святого", "ch_saint"),
+    "guidance": ("❓ Расскажите, что вас волнует, и получите бережное понятное объяснение.", "❓ Обратиться к помощнику", "ch_guidance"),
+    "practical": ("⛪ Получите пошаговую памятку и подготовьтесь без страха и путаницы.", "⛪ Открыть памятку", "ch_practical"),
+    "story": ("👼 Найдите святого по имени и узнайте дни его памяти.", "👼 Найти святого по имени", "ch_story"),
+    "evening": ("🌙 Завершите день спокойно — откройте вечернюю молитву и сохраните её.", "🌙 Открыть вечернюю молитву", "ch_evening"),
+    "qa": ("✍️ Остался свой вопрос? Выберите краткий, подробный или глубокий ответ.", "✍️ Задать свой вопрос", "ch_qa"),
+    "life": ("👼 Узнайте о святом покровителе и найдите день ангела.", "👼 Найти святого", "ch_life"),
+    "film": ("📚 Откройте библиотеку с книгами, молитвами и материалами о вере.", "📚 Открыть библиотеку", "ch_film"),
+    "gospel": ("📖 Откройте Евангелие дня и краткое объяснение простыми словами.", "📖 Евангелие дня", "ch_gospel"),
+    "photo": ("📸 Отправьте фотографию иконы — помощник постарается определить образ.", "📸 Узнать икону по фото", "ch_photo"),
+    "church": ("🗺️ Найдите ближайший храм по городу или геолокации.", "🗺️ Найти храм", "ch_church"),
+    "showcase_prayer": ("🙏 В помощнике собраны молитвы на разные жизненные ситуации.", "🙏 Выбрать молитву", "ch_showcase_prayer"),
+    "showcase_photo": ("📸 Не знаете, кто изображён на иконе? Отправьте фотографию помощнику.", "📸 Определить икону", "ch_showcase_photo"),
+    "showcase_angel": ("👼 Укажите имя и найдите возможные дни памяти небесного покровителя.", "👼 Узнать день ангела", "ch_showcase_angel"),
+    "showcase_confession": ("📿 Впервые собираетесь на исповедь? Откройте пошаговую подготовку.", "📿 Подготовиться к исповеди", "ch_showcase_confession"),
 }
 
-CHANNEL_CTA_TEXT = {
-    "morning": "🙏 Начните день с молитвы — откройте молитвослов в помощнике.",
-    "saint": "👼 Узнайте о своём небесном покровителе и днях его памяти.",
-    "gospel": "📖 Откройте Евангелие дня и другие материалы для чтения.",
-    "quote": "❓ Есть вопрос о вере? Задайте его православному помощнику.",
-    "evening": "🌙 Завершите день спокойно — откройте вечерние молитвы.",
-    "qa": "✍️ Не нашли ответ на свой вопрос? Спросите лично.",
-    "life": "👼 Найдите святого по имени и узнайте дни его памяти.",
-    "film": "📚 Откройте православную библиотеку и подборку полезных материалов.",
+# Куда направлять человека после перехода из канала.
+CHANNEL_ROUTES = {
+    "ch_morning": "prayers",
+    "ch_quote": "ask_question",
+    "ch_saint": "saints",
+    "ch_guidance": "ask_question",
+    "ch_practical": "sacraments",
+    "ch_story": "saints",
+    "ch_evening": "prayer_evening_ru",
+    "ch_qa": "ask_question",
+    "ch_life": "saints",
+    "ch_film": "library",
+    "ch_gospel": "daily_gospel",
+    "ch_photo": "photo_icon",
+    "ch_church": "find_church",
+    "ch_profile": "profile",
+    "ch_calendar": "calendar",
+    "ch_showcase_prayer": "prayers",
+    "ch_showcase_photo": "photo_icon",
+    "ch_showcase_angel": "saints",
+    "ch_showcase_confession": "sacr_ispoved",
 }
 
-def channel_button(ctype: str) -> InlineKeyboardMarkup:
-    label, start_param = BOT_DEEP_LINKS.get(ctype, ("☦️ Открыть помощника", "menu"))
-    return InlineKeyboardMarkup(inline_keyboard=[[
-        InlineKeyboardButton(text=label, url=f"{BOT_URL}?start={start_param}")
-    ]])
 
-def add_channel_cta(text: str, ctype: str) -> str:
-    cta = CHANNEL_CTA_TEXT.get(ctype, "☦️ Откройте православного помощника.")
-    return f"{text.rstrip()}\n\n─────────────────\n{cta}"
+def channel_button(cta_key: str) -> InlineKeyboardMarkup:
+    _footer, label, source = CHANNEL_CTA.get(cta_key, CHANNEL_CTA["guidance"])
+    return InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(
+        text=label,
+        url=f"{BOT_URL}?start={source}",
+    )]])
 
-async def send_channel_post(text: str, ctype: str, with_photo: bool = False):
-    """Отправляет пост с тематической кнопкой. При сбое фото отправляет текстом."""
-    reply_markup = channel_button(ctype)
-    final_text = add_channel_cta(text, ctype)
+
+def add_channel_cta(text: str, cta_key: str) -> str:
+    footer, _label, _source = CHANNEL_CTA.get(cta_key, CHANNEL_CTA["guidance"])
+    return f"{text.rstrip()}\n\n─────────────────\n{footer}"
+
+
+async def download_channel_image(url: str):
+    """Скачивает изображение сам, чтобы Telegram не зависел от загрузки URL своими серверами."""
+    try:
+        timeout = aiohttp.ClientTimeout(total=35, connect=15)
+        headers = {"User-Agent": "Mozilla/5.0 VeraBot/1.0"}
+        async with aiohttp.ClientSession(timeout=timeout, headers=headers) as session:
+            async with session.get(url, allow_redirects=True) as response:
+                if response.status != 200:
+                    raise RuntimeError(f"HTTP {response.status}")
+                data = await response.read()
+                if len(data) < 500:
+                    raise RuntimeError("Файл изображения слишком маленький")
+                content_type = (response.headers.get("Content-Type") or "image/jpeg").lower()
+                ext = "png" if "png" in content_type else "webp" if "webp" in content_type else "jpg"
+                return BufferedInputFile(data, filename=f"vera_icon.{ext}")
+    except Exception as e:
+        logging.error(f"Канал ТГ: не удалось скачать икону {url}: {e}")
+        return None
+
+
+async def send_channel_post(text: str, cta_key: str, with_photo: bool = False, msk_now: datetime = None) -> bool:
+    """Отправляет публикацию с тематической кнопкой и надёжным fallback."""
+    reply_markup = channel_button(cta_key)
+    final_text = add_channel_cta(text, cta_key)
+
     if with_photo:
-        icon_url = get_channel_icon()
+        icon_url = get_channel_icon(msk_now)
+        # Telegram ограничивает подпись к фото 1024 символами. CTA сохраняем всегда.
+        footer, _label, _source = CHANNEL_CTA.get(cta_key, CHANNEL_CTA["guidance"])
+        suffix = f"\n\n─────────────────\n{footer}"
+        max_body = max(150, 1024 - len(suffix) - 5)
+        body = text.rstrip()
+        if len(body) > max_body:
+            body = body[:max_body].rsplit(" ", 1)[0].rstrip(" ,.;:") + "…"
+        caption = body + suffix
         try:
-            await bot.send_photo(
-                CHANNEL_ID,
-                photo=icon_url,
-                caption=final_text[:1024],
-                parse_mode="Markdown",
-                reply_markup=reply_markup,
-            )
+            photo_file = await download_channel_image(icon_url)
+            if photo_file is not None:
+                await bot.send_photo(
+                    CHANNEL_ID,
+                    photo=photo_file,
+                    caption=caption,
+                    reply_markup=reply_markup,
+                )
+            else:
+                # Последний шанс: Telegram сам попробует скачать URL.
+                await bot.send_photo(
+                    CHANNEL_ID,
+                    photo=icon_url,
+                    caption=caption,
+                    reply_markup=reply_markup,
+                )
             return True
         except Exception as e:
-            logging.error(f"Канал: ошибка фото, пробую без фото: {e}")
+            logging.error(f"Канал ТГ: фото не отправлено, пробую текстом: {e}")
+
     try:
-        await bot.send_message(
-            CHANNEL_ID, final_text, parse_mode="Markdown", reply_markup=reply_markup
-        )
+        await bot.send_message(CHANNEL_ID, final_text[:4096], reply_markup=reply_markup)
         return True
     except Exception as e:
-        logging.error(f"Канал: ошибка отправки с кнопкой: {e}")
+        logging.error(f"Канал ТГ: отправка с кнопкой не удалась: {e}")
         try:
-            fallback = final_text + f"\n\n{BOT_URL}"
-            await bot.send_message(CHANNEL_ID, fallback, parse_mode="Markdown")
+            _footer, _label, source = CHANNEL_CTA.get(cta_key, CHANNEL_CTA["guidance"])
+            fallback = f"{final_text}\n\nОткрыть нужный раздел: {BOT_URL}?start={source}"
+            await bot.send_message(CHANNEL_ID, fallback[:4096])
             return True
         except Exception as fallback_error:
-            logging.error(f"Канал: резервная отправка не удалась: {fallback_error}")
+            logging.error(f"Канал ТГ: резервная отправка не удалась: {fallback_error}")
             return False
 
 logging.basicConfig(level=logging.INFO)
@@ -267,6 +335,39 @@ def init_db():
         content TEXT,
         saved_at TEXT
     )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS channel_posts (
+        post_key TEXT PRIMARY KEY,
+        post_date TEXT NOT NULL,
+        slot TEXT NOT NULL,
+        rubric TEXT NOT NULL,
+        topic TEXT DEFAULT '',
+        content TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS channel_clicks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        target TEXT NOT NULL,
+        clicked_at TEXT NOT NULL
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS user_reviews (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        chat_id INTEGER NOT NULL,
+        username TEXT DEFAULT '',
+        first_name TEXT DEFAULT '',
+        review_text TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'new',
+        owner_reply TEXT DEFAULT '',
+        created_at TEXT NOT NULL,
+        replied_at TEXT DEFAULT '',
+        handled_by TEXT DEFAULT ''
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_channel_clicks_source ON channel_clicks(source)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_channel_posts_date ON channel_posts(post_date)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_user_reviews_status ON user_reviews(status)")
     conn.commit()
     conn.close()
 
@@ -366,6 +467,56 @@ def get_favorites(user_id):
     rows = c.fetchall()
     conn.close()
     return rows
+
+
+def create_review_record(user_id, chat_id, username, first_name, review_text):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute(
+        """INSERT INTO user_reviews
+           (user_id, chat_id, username, first_name, review_text, status, created_at)
+           VALUES (?,?,?,?,?,'new',?)""",
+        (user_id, chat_id, username or "", first_name or "", review_text.strip(), datetime.now().isoformat()),
+    )
+    review_id = c.lastrowid
+    conn.commit()
+    conn.close()
+    return review_id
+
+
+def get_review_record(review_id):
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM user_reviews WHERE id=?", (int(review_id),)).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def update_review_record(review_id, status, owner_reply="", handled_by="Владелец"):
+    replied_at = datetime.now().strftime("%d.%m.%Y %H:%M")
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        """UPDATE user_reviews
+           SET status=?, owner_reply=?, replied_at=?, handled_by=?
+           WHERE id=?""",
+        (status, owner_reply or "", replied_at, handled_by, int(review_id)),
+    )
+    conn.commit()
+    conn.close()
+    return replied_at
+
+
+def record_channel_click(user_id, source, target):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            "INSERT INTO channel_clicks (user_id,source,target,clicked_at) VALUES (?,?,?,?)",
+            (user_id, source, target, datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Не удалось записать переход из канала: {e}")
 
 # ========== GOOGLE SHEETS ==========
 def get_sheet():
@@ -1862,27 +2013,62 @@ def add_donation_to_sheet(user_id, username, first_name, amount):
     except Exception as e:
         logging.error(f"Sheets add_donation: {e}")
 
-def add_review_to_sheet(user_id, username, first_name, text):
+REVIEW_SHEET_HEADERS_TG = [
+    "ID", "Username", "Имя", "Дата", "Тип", "Отзыв",
+    "Номер отзыва", "Статус", "Ответ владельца", "Дата ответа", "Ответил"
+]
+
+
+def ensure_review_sheet_tg(sp=None):
+    """Создаёт или расширяет лист отзывов до CRM-структуры."""
     try:
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds  = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
-        client = gspread.authorize(creds)
-        sp     = client.open_by_key(SPREADSHEET_ID)
-        # Записываем в лист отзывов
+        if sp is None:
+            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+            creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+            client = gspread.authorize(creds)
+            sp = client.open_by_key(SPREADSHEET_ID)
         try:
             sheet = sp.worksheet("Отзывы ВераБот")
         except Exception:
-            sheet = sp.add_worksheet(title="Отзывы ВераБот", rows=1000, cols=6)
-            sheet.insert_row(["ID","Username","Имя","Дата","Тип","Отзыв"], 1)
+            sheet = sp.add_worksheet(title="Отзывы ВераБот", rows=1000, cols=len(REVIEW_SHEET_HEADERS_TG))
+        if getattr(sheet, "col_count", 0) < len(REVIEW_SHEET_HEADERS_TG):
+            sheet.resize(cols=len(REVIEW_SHEET_HEADERS_TG))
+        current = sheet.row_values(1)
+        for index, header in enumerate(REVIEW_SHEET_HEADERS_TG, start=1):
+            if len(current) < index or current[index - 1] != header:
+                sheet.update_cell(1, index, header)
+        return sheet
+    except Exception as e:
+        logging.error(f"ensure_review_sheet_tg: {e}")
+        return None
+
+
+def ensure_review_sheet_schema_tg():
+    ensure_review_sheet_tg()
+
+
+def sheets_add_review_tg(review_id, user_id, username, first_name, text):
+    try:
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+        client = gspread.authorize(creds)
+        sp = client.open_by_key(SPREADSHEET_ID)
+        sheet = ensure_review_sheet_tg(sp)
+        if not sheet:
+            return
         sheet.append_row([
             str(user_id),
             f"@{username}" if username else "—",
             first_name or "—",
             datetime.now().strftime("%d.%m.%Y %H:%M"),
             "Отзыв/пожелание",
-            text
+            text,
+            str(review_id),
+            "Новый",
+            "—",
+            "—",
+            "—",
         ])
-        # Обновляем счётчик отзывов в листе ВераБот
         try:
             main_sheet = sp.worksheet("ВераТГ")
             col = main_sheet.col_values(1)
@@ -1893,7 +2079,58 @@ def add_review_to_sheet(user_id, username, first_name, text):
         except Exception:
             pass
     except Exception as e:
-        logging.error(f"Ошибка записи отзыва: {e}")
+        logging.error(f"sheets_add_review_tg: {e}")
+
+
+def sheets_update_review_tg(review_id, status, reply_text="", replied_at="", handled_by="Владелец"):
+    import time
+    for attempt in range(1, 6):
+        try:
+            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+            creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+            client = gspread.authorize(creds)
+            sp = client.open_by_key(SPREADSHEET_ID)
+            sheet = ensure_review_sheet_tg(sp)
+            if not sheet:
+                return
+            review_ids = sheet.col_values(7)
+            review_id_str = str(review_id)
+            if review_id_str in review_ids:
+                row = review_ids.index(review_id_str) + 1
+                sheet.update_cell(row, 8, status)
+                sheet.update_cell(row, 9, reply_text or "—")
+                sheet.update_cell(row, 10, replied_at or "—")
+                sheet.update_cell(row, 11, handled_by or "Владелец")
+                return
+            if attempt < 5:
+                time.sleep(2)
+        except Exception as e:
+            logging.error(f"sheets_update_review_tg attempt {attempt}: {e}")
+            if attempt < 5:
+                time.sleep(2)
+    logging.warning(f"Отзыв Telegram #{review_id} не найден в Google Sheets")
+
+
+def sheets_update_latest_review_by_user_tg(user_id, status, reply_text, replied_at, handled_by="Владелец"):
+    try:
+        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+        client = gspread.authorize(creds)
+        sp = client.open_by_key(SPREADSHEET_ID)
+        sheet = ensure_review_sheet_tg(sp)
+        if not sheet:
+            return
+        ids = sheet.col_values(1)
+        rows = [i + 1 for i, value in enumerate(ids) if value == str(user_id)]
+        if not rows:
+            return
+        row = rows[-1]
+        sheet.update_cell(row, 8, status)
+        sheet.update_cell(row, 9, reply_text or "—")
+        sheet.update_cell(row, 10, replied_at or "—")
+        sheet.update_cell(row, 11, handled_by or "Владелец")
+    except Exception as e:
+        logging.error(f"sheets_update_latest_review_by_user_tg: {e}")
 
 # ========== МЕНЮ ==========
 def main_menu():
@@ -2335,146 +2572,187 @@ async def get_daily_gospel() -> str:
             f"— {ref}"
         )
 
-SENT_LOG_FILE = "/root/vera_channel_sent.txt"
+def channel_post_exists(post_key: str) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT status FROM channel_posts WHERE post_key=?", (post_key,)).fetchone()
+    conn.close()
+    return bool(row and row[0] == "sent")
 
-def _load_sent_today():
-    """Читает с диска какие посты уже отправлены сегодня"""
-    today = datetime.utcnow().strftime("%Y-%m-%d")
-    sent = set()
-    try:
-        with open(SENT_LOG_FILE, "r") as f:
-            for line in f:
-                line = line.strip()
-                # храним строки вида 2026-06-05_7
-                if line.startswith(today):
-                    sent.add(line)
-    except FileNotFoundError:
-        pass
-    return sent
 
-def _mark_sent(key):
-    """Записывает на диск что пост отправлен"""
+def save_channel_post(post_key, post_date, slot, rubric, topic, content, status):
     try:
-        with open(SENT_LOG_FILE, "a") as f:
-            f.write(key + "\n")
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            """INSERT OR REPLACE INTO channel_posts
+               (post_key,post_date,slot,rubric,topic,content,status,created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (post_key, post_date, slot, rubric, topic[:250], content[:4000], status, datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
     except Exception as e:
-        logging.error(f"Не удалось записать SENT_LOG: {e}")
+        logging.error(f"Канал ТГ: журнал публикации не сохранён: {e}")
+
+
+def recent_channel_topics(limit: int = 35) -> str:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT rubric,topic FROM channel_posts WHERE status='sent' ORDER BY created_at DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+        conn.close()
+        return "\n".join(f"- {rubric}: {topic}" for rubric, topic in rows if topic)
+    except Exception:
+        return ""
+
+
+def extract_topic(text: str) -> str:
+    return " ".join((text or "").replace("\n", " ").split())[:180]
+
+
+FALLBACK_POSTS = {
+    "morning": "🌅 Господи, благослови наступающий день. Даруй нам мир в сердце, мудрость в словах и силы делать добро. Помоги не осуждать, не унывать и помнить о Тебе в каждом деле. Аминь.",
+    "quote": "✝️ Мир в душе начинается с внимания к собственному сердцу. Прежде чем осудить другого, остановимся и попросим у Бога кротости и рассудительности.",
+    "saint": "📅 Сегодня Церковь вспоминает святых, которые своей жизнью показали верность Богу. Их пример напоминает: святость начинается с небольших ежедневных решений — молитвы, милосердия и честности.",
+    "guidance": "🕯️ Когда молитва не идёт, не нужно отчаиваться. Скажите Богу несколько простых слов своими словами и останьтесь в тишине. Верность важнее сильных чувств.",
+    "practical": "⛪ Первый шаг в храме не требует идеальной подготовки. Придите немного заранее, встаньте там, где удобно, и спокойно наблюдайте за службой. Если что-то непонятно, после богослужения можно вежливо спросить служителя храма.",
+    "story": "👼 Святые становились святыми не потому, что у них не было трудностей, а потому, что они снова и снова выбирали верность Богу. Их жизнь учит нас не бояться начинать заново.",
+    "evening": "🌙 Господи, благодарю Тебя за прошедший день. Прости всё, чем я согрешил словом, делом и мыслью. Сохрани моих близких и даруй нам мирный сон. Аминь.",
+    "qa": "❓ Можно ли молиться своими словами? Да. Церковные молитвы учат нас, но Господь слышит и искреннее обращение сердца. Говорите просто, честно и с доверием.",
+    "life": "📖 Жития святых напоминают, что вера раскрывается в поступках: терпении, заботе о ближнем, покаянии и молитве. Даже небольшой добрый шаг может стать началом большого внутреннего изменения.",
+    "film": "📽️ Для семейного просмотра выберите проверенный документальный фильм о православных святынях или истории монастыря. После просмотра обсудите, какая мысль особенно затронула каждого.",
+    "showcase_prayer": "🙏 Не знаете, какую молитву прочитать в тревоге, дороге, болезни или перед сном? В православном помощнике молитвы собраны по жизненным ситуациям — нужное можно открыть за несколько секунд.",
+    "showcase_photo": "📸 Иногда дома хранится икона, но семья уже не помнит, кто на ней изображён. Отправьте фотографию православному помощнику — он постарается определить образ и объяснить символы.",
+    "showcase_angel": "👼 День ангела связан с памятью святого, чьё имя человек носит в Крещении. В помощнике можно найти имя и посмотреть возможные дни памяти.",
+    "showcase_confession": "📿 Первая исповедь часто пугает неизвестностью. В помощнике есть спокойная пошаговая памятка: как подготовиться, что говорить и как проходит Таинство.",
+}
+
+
+async def generate_channel_post(prompt: str, cta_key: str, rubric: str):
+    history = recent_channel_topics(35)
+    history_note = f"\n\nНе повторяй эти недавние темы:\n{history}" if history else ""
+    full_prompt = (
+        prompt + history_note +
+        "\nВ первой строке дай понятный заголовок. Не повторяй одинаковые вступления. "
+        "Общий объём — до 750 символов, чтобы публикация помещалась под изображением."
+    )
+    try:
+        msg = await claude_messages_create(
+            model="claude-sonnet-4-5",
+            max_tokens=500,
+            system=(
+                "Ты редактор православного канала и православный помощник. Пиши тепло, ясно и практически, "
+                "опираясь на православную традицию. Не представляйся священником, не давай личных благословений, "
+                "не выдумывай цитаты, факты, чудеса, фильмы или церковные правила. Пиши короткими абзацами, без хэштегов. "
+                "Не добавляй ссылки и рекламу — CTA добавит программа. Не используй Markdown-разметку."
+            ),
+            messages=[{"role": "user", "content": full_prompt}],
+        )
+        post_text = msg.content[0].text.strip()
+        if len(post_text) < 60:
+            raise RuntimeError("AI вернул слишком короткий текст")
+    except Exception as e:
+        logging.error(f"Канал ТГ: генерация {rubric} не удалась, fallback: {e}")
+        post_text = FALLBACK_POSTS.get(cta_key, FALLBACK_POSTS["guidance"])
+    return post_text, extract_topic(post_text)
+
+
+def build_daily_slots(msk_now: datetime):
+    date_text = f"{msk_now.day} {MONTHS_RU[msk_now.month]}"
+    weekday = msk_now.weekday()
+    midday_rotation = {
+        0: ("церковное слово", "practical", "Объясни одно церковное слово или элемент богослужения простыми словами и приведи практический пример."),
+        1: ("вопрос новичка", "qa", "Разбери один частый вопрос человека, который недавно пришёл к вере. Дай спокойный и конкретный ответ."),
+        2: ("история святого", "story", "Расскажи проверяемый эпизод из жизни православного святого и практический урок для современного человека."),
+        3: ("храм и традиция", "church", "Расскажи об одной православной традиции или о том, как вести себя в храме. Дай 3 понятных практических шага."),
+        4: ("подготовка к Таинству", "practical", "Дай бережную практическую памятку по подготовке к исповеди, Причастию или посещению храма. Уточни, что правила согласуют со священником своего прихода."),
+        5: ("житие и пример", "story", "Расскажи краткую проверяемую историю православного святого и чему учит его пример."),
+        6: ("семейное чтение", "film", "Порекомендуй реально существующую православную книгу, фильм или документальный проект для семейного просмотра. Если не уверен в точных данных, не указывай год."),
+    }
+    midday = midday_rotation[weekday]
+    return [
+        (7, "утренняя молитва", "morning", f"Утренняя молитвенная публикация на {date_text}: благодарность, просьба о помощи и один простой настрой на день."),
+        (8, "мысль дня", "quote", "Передай одну проверяемую мысль святого отца без сомнительной дословной цитаты и кратко объясни её на жизненном примере."),
+        (9, "святой или праздник дня", "saint", "__DYNAMIC_SAINT__"),
+        (10, "практическая вера", "guidance", "Разбери конкретную жизненную трудность: рассеянность в молитве, тревога, обида, уныние, семейная ссора или страх. Дай 3 бережных практических шага."),
+        (12, midday[0], midday[1], midday[2]),
+        (20, "вечерняя молитва", "evening", "Вечерняя молитвенная публикация: благодарность за день, просьба о прощении и мирном сне. Коротко и тепло."),
+    ]
+
+
+def dynamic_saint_prompt(msk_now: datetime) -> str:
+    date_key = msk_now.strftime("%d.%m")
+    feast = FIXED_FEASTS.get(date_key, "")
+    saints = []
+    for name, days in SAINTS_BY_NAME.items():
+        for day_str, saint in days:
+            if day_str == date_key:
+                saints.append((name.capitalize(), saint))
+    if feast:
+        return f"Сегодня {date_key}, праздник: {feast}. Кратко и точно объясни смысл праздника, традицию дня и один практический вывод."
+    if saints:
+        names = ", ".join(s[0] for s in saints[:2])
+        return f"Сегодня {date_key}, память: {names}. {saints[0][1]}. Расскажи только проверяемые сведения и один практический урок."
+    return f"Сегодня {date_key}. Напиши календарное духовное напоминание без выдумывания святого дня."
+
+
+def special_slots(msk_now: datetime):
+    wd = msk_now.weekday()
+    slots = []
+    if wd == 1:
+        slots.append((17, "возможности помощника: молитвы", "showcase_prayer", FALLBACK_POSTS["showcase_prayer"]))
+    elif wd == 3:
+        if int(msk_now.strftime("%W")) % 2:
+            slots.append((17, "возможности помощника: икона", "showcase_photo", FALLBACK_POSTS["showcase_photo"]))
+        else:
+            slots.append((17, "возможности помощника: исповедь", "showcase_confession", FALLBACK_POSTS["showcase_confession"]))
+    if wd == 4:
+        slots.append((11, "вопрос-ответ недели", "qa", "Выбери частый вопрос о вере, молитве или Таинствах у начинающего и дай конкретный бережный ответ."))
+    elif wd == 5:
+        slots.append((11, "житие недели", "life", "Расскажи проверяемое житие одного православного святого: путь, подвиг и значение для Церкви. Без выдуманных чудес."))
+    elif wd == 6:
+        slots.append((11, "фильм или книга недели", "film", "Порекомендуй реально существующий православный фильм, документальный проект или книгу. Укажи, кому подойдёт и почему."))
+    return slots
+
+
+async def publish_channel_slot(msk_now, hour, rubric, cta_key, prompt):
+    date_key = msk_now.strftime("%Y-%m-%d")
+    post_key = f"{date_key}_{hour:02d}_{rubric}"
+    if channel_post_exists(post_key):
+        return False
+    if prompt == "__DYNAMIC_SAINT__":
+        prompt = dynamic_saint_prompt(msk_now)
+    post_text, topic = await generate_channel_post(prompt, cta_key, rubric)
+    ok = await send_channel_post(
+        post_text,
+        cta_key,
+        with_photo=cta_key in {"saint", "life"},
+        msk_now=msk_now,
+    )
+    save_channel_post(post_key, date_key, f"{hour:02d}:00", rubric, topic, post_text, "sent" if ok else "failed")
+    if ok:
+        logging.info(f"Канал ТГ: опубликовано — {rubric}")
+        if hour == 7:
+            asyncio.create_task(morning_broadcast())
+    else:
+        logging.error(f"Канал ТГ: не опубликовано — {rubric}; повтор в текущем окне")
+    return ok
+
 
 async def channel_post_loop():
-    """Автопостинг в Telegram-канал по московскому времени без дублей."""
+    """Надёжный автопостинг по МСК с журналом, аналитикой и защитой от повторов."""
     await asyncio.sleep(15)
-    sent_today = _load_sent_today()
-    logging.info(f"Канал ТГ: загружено отправленных сегодня: {len(sent_today)}")
-
-    daily_schedule = {7: "morning", 8: "saint", 10: "gospel", 12: "quote", 20: "evening"}
-
     while True:
         try:
             msk_now = datetime.utcnow() + timedelta(hours=3)
-            hour = msk_now.hour
-            today = msk_now.strftime("%Y-%m-%d")
-            today_str = f"{msk_now.day} {MONTHS_RU[msk_now.month]}"
-
-            # В 11:00 только одна недельная рубрика по московскому дню недели.
-            ctype = daily_schedule.get(hour)
-            if hour == 11:
-                ctype = {4: "qa", 5: "life", 6: "film"}.get(msk_now.weekday())
-
-            if ctype and msk_now.minute < 30:
-                key = f"{today}_{hour}_{ctype}"
-                if key not in sent_today:
-                    logging.info(f"Канал ТГ {hour}:00 МСК — готовлю ({ctype})")
-                    text = None
-                    do_broadcast = False
-                    try:
-                        if ctype == "morning":
-                            feast = get_todays_feast()
-                            saints = get_todays_saints()
-                            context = f"Сегодня праздник: {feast}." if feast else (
-                                f"Сегодня память: {', '.join([x[0] for x in saints[:2]])}." if saints else ""
-                            )
-                            msg = await claude_messages_create(
-                                model="claude-sonnet-4-5", max_tokens=400,
-                                system="Ты православный помощник. Пишешь тепло, бережно и душевно. Не представляйся священником.",
-                                messages=[{"role": "user", "content": (
-                                    f"Напиши пост для православного канала — утренняя молитва или благословение на день. "
-                                    f"Сегодня {today_str}. {context} 4-5 предложений. Начни с эмодзи 🌅. "
-                                    "Пиши только по-русски. Без ссылок и рекламы в конце."
-                                )}]
-                            )
-                            text = msg.content[0].text.strip()
-                            do_broadcast = True
-                        elif ctype == "saint":
-                            text = await get_daily_saint()
-                        elif ctype == "gospel":
-                            text = await get_daily_gospel()
-                        elif ctype == "quote":
-                            text = await get_daily_quote()
-                        elif ctype == "evening":
-                            msg = await claude_messages_create(
-                                model="claude-sonnet-4-5", max_tokens=400,
-                                system="Ты православный помощник. Пишешь тепло, бережно и душевно. Не представляйся священником.",
-                                messages=[{"role": "user", "content": (
-                                    f"Напиши пост для православного канала — вечерняя молитва или слова утешения на конец дня. "
-                                    f"Сегодня {today_str}. 4-5 предложений. Начни с эмодзи 🌙. "
-                                    "Пиши только по-русски. Без ссылок и рекламы в конце."
-                                )}]
-                            )
-                            text = msg.content[0].text.strip()
-                        elif ctype == "qa":
-                            msg = await claude_messages_create(
-                                model="claude-sonnet-4-5", max_tokens=500,
-                                system="Ты православный помощник. Отвечаешь тепло, бережно и понятно. Не представляйся священником.",
-                                messages=[{"role": "user", "content": (
-                                    "Напиши пост для православного канала в формате вопрос-ответ. "
-                                    "Выбери частый вопрос о вере, молитве или Таинствах и дай понятный тёплый ответ. "
-                                    "Начни с эмодзи ❓. Пиши только по-русски. Без ссылок и рекламы в конце."
-                                )}]
-                            )
-                            text = msg.content[0].text.strip()
-                        elif ctype == "life":
-                            msg = await claude_messages_create(
-                                model="claude-sonnet-4-5", max_tokens=600,
-                                system="Ты православный помощник. Пишешь тепло, бережно и душевно. Не представляйся священником.",
-                                messages=[{"role": "user", "content": (
-                                    "Напиши для православного канала развёрнутое житие православного святого: "
-                                    "история, подвиг, чудеса и чему учит его пример. 5-7 предложений. "
-                                    "Начни с эмодзи 📖. Без ссылок и рекламы в конце."
-                                )}]
-                            )
-                            text = msg.content[0].text.strip()
-                        elif ctype == "film":
-                            msg = await claude_messages_create(
-                                model="claude-sonnet-4-5", max_tokens=500,
-                                system="Ты православный помощник. Пишешь тепло, бережно и душевно. Не представляйся священником.",
-                                messages=[{"role": "user", "content": (
-                                    "Порекомендуй для православного канала православный или документальный фильм о вере. "
-                                    "Укажи название, год, краткое описание и почему стоит посмотреть. "
-                                    "Начни с эмодзи 📽️. Без ссылок и рекламы в конце."
-                                )}]
-                            )
-                            text = msg.content[0].text.strip()
-                    except Exception as e:
-                        logging.error(f"Канал ТГ: ошибка подготовки {ctype}: {e}")
-
-                    if text:
-                        with_photo = ctype in {"saint", "life"}
-                        ok = False
-                        for attempt in range(1, 4):
-                            ok = await send_channel_post(text, ctype, with_photo=with_photo)
-                            if ok:
-                                break
-                            logging.error(f"Канал ТГ: попытка {attempt} не удалась")
-                            await asyncio.sleep(10)
-                        if ok:
-                            sent_today.add(key)
-                            _mark_sent(key)
-                            logging.info(f"Канал ТГ {hour}:00 — отправлено успешно ({ctype})")
-                            if do_broadcast:
-                                asyncio.create_task(morning_broadcast())
-                            await asyncio.sleep(60)
+            slots = build_daily_slots(msk_now) + special_slots(msk_now)
+            for hour, rubric, cta_key, prompt in slots:
+                if msk_now.hour == hour and msk_now.minute < 30:
+                    await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
+                    await asyncio.sleep(3)
         except Exception as e:
-            logging.error(f"Канал ТГ: ошибка цикла — {e}")
+            logging.exception(f"Канал ТГ: ошибка планировщика: {e}")
         await asyncio.sleep(30)
 
 
@@ -2591,92 +2869,108 @@ async def angel_reminder_loop():
 
 # ========== ХЭНДЛЕРЫ ==========
 
-@dp.message(Command("start"))
-async def cmd_start(message: Message):
-    user_id    = message.from_user.id
-    username   = message.from_user.username   or ""
-    first_name = message.from_user.first_name or ""
-    user = get_user(user_id, username, first_name)
-    asyncio.create_task(asyncio.to_thread(sheets_add_user, user_id, username, first_name))
-
-    # Deep-link из канала: /start prayers, saints, gospel, question, evening, library.
-    parts = (message.text or "").split(maxsplit=1)
-    start_param = parts[1].strip().lower() if len(parts) > 1 else ""
-    deep_links = {
-        "prayers": (
-            "🙏 *Молитвы всегда под рукой*\n\nВыберите нужную молитву или откройте молитву дня.",
-            prayers_menu(),
-        ),
-        "saints": (
-            "👼 *Святые и небесный покровитель*\n\nНайдите святого по имени или посмотрите именинников дня.",
-            InlineKeyboardMarkup(inline_keyboard=[
+async def send_deep_link_destination(message: Message, target: str):
+    """Сразу открывает обещанную функцию, а не промежуточную рекламу."""
+    user_id = message.from_user.id
+    if target == "prayers":
+        await message.answer("🙏 Молитвы\n\nВыберите нужную молитву:", reply_markup=prayers_menu())
+    elif target == "saints":
+        await message.answer(
+            "👼 Святые и небесный покровитель\n\nНайдите святого по имени или посмотрите именинников дня.",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
                 [InlineKeyboardButton(text="🔍 Найти святого по имени", callback_data="saint_search")],
                 [InlineKeyboardButton(text="👼 Именинники сегодня", callback_data="cal_namedays")],
                 [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
             ]),
-        ),
-        "gospel": (
-            "📖 *Евангелие дня*\n\nОткройте сегодняшнее чтение и краткое объяснение.",
-            InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="📖 Читать Евангелие дня", callback_data="daily_gospel")],
-                [InlineKeyboardButton(text="📚 Открыть библиотеку", callback_data="library")],
-                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
-            ]),
-        ),
-        "question": (
-            "❓ *Задайте свой вопрос о вере*\n\nВыберите глубину ответа и напишите вопрос текстом или голосом.",
-            InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="✍️ Задать вопрос", callback_data="ask_question")],
-                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
-            ]),
-        ),
-        "evening": (
-            "🌙 *Вечерние молитвы*\n\nЗавершите день спокойно и сохраните нужную молитву в избранное.",
-            InlineKeyboardMarkup(inline_keyboard=[
-                [InlineKeyboardButton(text="🌙 Вечерняя молитва", callback_data="prayer_evening_ru")],
+        )
+    elif target == "daily_gospel":
+        await message.answer(await get_daily_gospel(), parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📅 Календарь", callback_data="calendar")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+        ]))
+    elif target == "ask_question":
+        set_step(user_id, "ask_depth")
+        await message.answer("❓ Задайте свой вопрос о вере\n\nВыберите глубину ответа:", reply_markup=question_depth_menu())
+    elif target == "prayer_evening_ru":
+        prayer = PRAYERS["evening_ru"]
+        await message.answer(
+            f"{prayer['title']}\n\n{prayer['text']}",
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="⭐ Сохранить в избранное", callback_data="save_prayer_evening_ru")],
                 [InlineKeyboardButton(text="🙏 Все молитвы", callback_data="prayers")],
                 [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
             ]),
-        ),
-        "library": (
-            "📚 *Православная библиотека*\n\nКниги, молитвослов, Псалтирь и материалы о вере.",
-            library_menu(),
-        ),
-        "menu": ("☦️ *Православный помощник «С верой»*", main_menu()),
+        )
+    elif target == "library":
+        await message.answer("📚 Православная библиотека\n\nВыберите раздел:", reply_markup=library_menu())
+    elif target == "photo_icon":
+        set_step(user_id, "photo_icon")
+        await message.answer("🖼️ Отправьте фотографию иконы — я постараюсь определить образ и объяснить символы.", reply_markup=back_menu())
+    elif target == "find_church":
+        set_step(user_id, "find_church")
+        await message.answer("🗺️ Найти храм рядом\n\nОтправьте геолокацию или введите город:", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📍 Отправить геолокацию", callback_data="send_location")],
+            [InlineKeyboardButton(text="✏️ Ввести город", callback_data="city_text")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+        ]))
+    elif target == "sacraments":
+        await message.answer("⛪ Таинства и обряды\n\nВыберите раздел:", reply_markup=sacraments_menu())
+    elif target == "calendar":
+        await message.answer("📅 Православный календарь\n\nВыберите раздел:", reply_markup=calendar_menu())
+    elif target == "profile":
+        await message.answer("👤 Мой профиль", reply_markup=profile_menu(get_user(user_id)))
+    elif target == "sacr_ispoved":
+        sacr = SACRAMENTS["ispoved"]
+        await message.answer(f"{sacr['title']}\n\n{sacr['text']}", reply_markup=back_section("sacraments"))
+    else:
+        await message.answer("☦️ Главное меню:", reply_markup=main_menu())
+
+
+@dp.message(Command("start"))
+async def cmd_start(message: Message):
+    user_id = message.from_user.id
+    username = message.from_user.username or ""
+    first_name = message.from_user.first_name or ""
+    user = get_user(user_id, username, first_name)
+    asyncio.create_task(asyncio.to_thread(sheets_add_user, user_id, username, first_name))
+
+    parts = (message.text or "").split(maxsplit=1)
+    start_param = parts[1].strip().lower() if len(parts) > 1 else ""
+    target = CHANNEL_ROUTES.get(start_param)
+    if target:
+        record_channel_click(user_id, start_param, target)
+        await send_deep_link_destination(message, target)
+        return
+
+    legacy_routes = {
+        "prayers": "prayers", "saints": "saints", "gospel": "daily_gospel",
+        "daily_gospel": "daily_gospel", "question": "ask_question", "ask_question": "ask_question",
+        "evening": "prayer_evening_ru", "prayer_evening_ru": "prayer_evening_ru",
+        "library": "library", "photo_icon": "photo_icon", "find_church": "find_church",
+        "sacraments": "sacraments", "calendar": "calendar", "profile": "profile",
+        "sacr_ispoved": "sacr_ispoved", "menu": "main_menu", "main_menu": "main_menu",
     }
-    if start_param in deep_links:
-        title, markup = deep_links[start_param]
-        await message.answer(title, parse_mode="Markdown", reply_markup=markup)
+    if start_param in legacy_routes:
+        await send_deep_link_destination(message, legacy_routes[start_param])
         return
 
     if not user.get("onboarded"):
         await message.answer(
-            f"☦️ *Добро пожаловать в «С верой»!*\n\n"
-            f"Я ваш православный помощник — здесь всё\n"
-            f"что нужно для духовной жизни:\n\n"
-            f"🙏 Молитвы на все случаи жизни\n"
-            f"📅 Православный календарь и посты\n"
-            f"⛪ Таинства — как подготовиться\n"
-            f"👼 Жития святых и мощи\n"
-            f"🏛️ Святые места России и мира\n"
-            f"📸 Узнать храм или икону по фото\n"
-            f"❓ Задать вопрос о вере\n\n"
-            f"─────────────────\n"
-            f"Чтобы напоминать о *дне ангела* —\n"
-            f"укажите имя при крещении и дату рождения.\n"
-            f"Займёт 30 секунд 🕊️",
-            parse_mode="Markdown",
-            reply_markup=onboarding_menu()
+            "☦️ Добро пожаловать в «С верой»!\n\n"
+            "Я ваш православный помощник — здесь всё, что нужно для духовной жизни:\n\n"
+            "🙏 Молитвы на все случаи жизни\n"
+            "📅 Православный календарь и посты\n"
+            "⛪ Таинства — как подготовиться\n"
+            "👼 Жития святых и дни памяти\n"
+            "🏛️ Святые места России и мира\n"
+            "📸 Узнать храм или икону по фото\n"
+            "❓ Задать вопрос о вере\n\n"
+            "Чтобы напоминать о дне ангела, укажите имя при крещении и дату рождения.",
+            reply_markup=onboarding_menu(),
         )
     else:
         name = user.get("church_name") or first_name
-        await message.answer(
-            f"☦️ *С возвращением, {name}!*\n\n"
-            f"Рад видеть вас снова 🕊️\n\n"
-            f"Чем могу помочь?",
-            parse_mode="Markdown",
-            reply_markup=main_menu()
-        )
+        await message.answer(f"☦️ С возвращением, {name}!\n\nЧем могу помочь?", reply_markup=main_menu())
 
 @dp.message(Command("menu"))
 async def cmd_menu(message: Message):
@@ -3396,6 +3690,20 @@ async def cb_find_church(callback: CallbackQuery):
     )
     await callback.answer()
 
+@dp.callback_query(F.data == "send_location")
+async def cb_send_location(callback: CallbackQuery):
+    set_step(callback.from_user.id, "find_church")
+    await callback.message.answer(
+        "Нажмите кнопку ниже и разрешите Telegram отправить вашу геолокацию:",
+        reply_markup=ReplyKeyboardMarkup(
+            keyboard=[[KeyboardButton(text="📍 Отправить мою геолокацию", request_location=True)]],
+            resize_keyboard=True,
+            one_time_keyboard=True,
+        ),
+    )
+    await callback.answer()
+
+
 @dp.callback_query(F.data == "city_text")
 async def cb_city_text(callback: CallbackQuery):
     set_step(callback.from_user.id, "find_church_city")
@@ -3650,6 +3958,163 @@ async def cb_review(callback: CallbackQuery):
     )
     await callback.answer()
 
+
+async def notify_owner_about_review(review_id, message: Message, review_text: str):
+    keyboard = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✍️ Ответить пользователю", callback_data=f"owner_review_reply:{review_id}")],
+        [InlineKeyboardButton(text="✅ Отметить обработанным", callback_data=f"owner_review_done:{review_id}")],
+    ])
+    username = f"@{message.from_user.username}" if message.from_user.username else "—"
+    owner_text = (
+        f"💬 Новый отзыв #{review_id} в «С верой» Telegram\n\n"
+        f"Имя: {message.from_user.first_name or '—'}\n"
+        f"Username: {username}\n"
+        f"ID: {message.from_user.id}\n\n"
+        f"{review_text[:3000]}"
+    )
+    await bot.send_message(OWNER_ID, owner_text, reply_markup=keyboard)
+
+
+async def process_new_review(message: Message, review_text: str):
+    review_text = review_text.strip()
+    if not review_text:
+        await message.answer("⚠️ Отзыв пустой. Напишите текст или отправьте голосовое сообщение.")
+        return
+    review_id = create_review_record(
+        message.from_user.id,
+        message.chat.id,
+        message.from_user.username or "",
+        message.from_user.first_name or "",
+        review_text,
+    )
+    asyncio.create_task(asyncio.to_thread(
+        sheets_add_review_tg,
+        review_id,
+        message.from_user.id,
+        message.from_user.username or "",
+        message.from_user.first_name or "",
+        review_text,
+    ))
+    try:
+        await notify_owner_about_review(review_id, message, review_text)
+    except Exception as e:
+        logging.error(f"Не удалось уведомить владельца об отзыве #{review_id}: {e}")
+    set_step(message.from_user.id, "idle")
+    await message.answer(
+        "☦️ Спасибо за ваш отзыв!\n\nМы его получили. При необходимости команда проекта ответит вам прямо здесь.",
+        reply_markup=main_menu(),
+    )
+
+
+async def process_owner_review_reply(message: Message, review_id: int, reply_text: str):
+    review = get_review_record(review_id)
+    if not review:
+        set_step(message.from_user.id, "idle")
+        await message.answer(f"⚠️ Отзыв #{review_id} не найден.")
+        return
+    reply_text = reply_text.strip()
+    if not reply_text:
+        await message.answer("⚠️ Ответ пустой. Напишите текст ответа.")
+        return
+    try:
+        await bot.send_message(
+            review["chat_id"],
+            "☦️ Ответ команды проекта «С верой»\n\n" + reply_text[:3500],
+            reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+                [InlineKeyboardButton(text="💬 Написать ещё", callback_data="review")],
+                [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+            ]),
+        )
+    except Exception as e:
+        await message.answer(f"⚠️ Не удалось отправить ответ пользователю: {e}")
+        return
+    replied_at = update_review_record(review_id, "answered", reply_text, "Владелец")
+    asyncio.create_task(asyncio.to_thread(
+        sheets_update_review_tg, review_id, "Отвечено", reply_text, replied_at, "Владелец"
+    ))
+    set_step(message.from_user.id, "idle")
+    await message.answer(f"✅ Ответ на отзыв #{review_id} отправлен пользователю.")
+
+
+@dp.callback_query(F.data.startswith("owner_review_reply:"))
+async def cb_owner_review_reply(callback: CallbackQuery):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("Недоступно", show_alert=True)
+        return
+    get_user(callback.from_user.id, callback.from_user.username or "", callback.from_user.first_name or "")
+    review_id = int(callback.data.split(":", 1)[1])
+    review = get_review_record(review_id)
+    if not review:
+        await callback.message.answer(f"⚠️ Отзыв #{review_id} не найден.")
+        await callback.answer()
+        return
+    set_step(callback.from_user.id, f"owner_review_reply:{review_id}")
+    await callback.message.answer(
+        f"✍️ Ответ на отзыв #{review_id}\n\n"
+        f"Пользователь: {review.get('first_name') or review.get('user_id')}\n"
+        f"Отзыв: {review.get('review_text', '')[:2000]}\n\n"
+        "Напишите ответ следующим сообщением.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="❌ Отменить", callback_data="owner_review_cancel")]
+        ]),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("owner_review_done:"))
+async def cb_owner_review_done(callback: CallbackQuery):
+    if callback.from_user.id != OWNER_ID:
+        await callback.answer("Недоступно", show_alert=True)
+        return
+    review_id = int(callback.data.split(":", 1)[1])
+    review = get_review_record(review_id)
+    if not review:
+        await callback.message.answer(f"⚠️ Отзыв #{review_id} не найден.")
+        await callback.answer()
+        return
+    replied_at = update_review_record(review_id, "handled", review.get("owner_reply", ""), "Владелец")
+    asyncio.create_task(asyncio.to_thread(
+        sheets_update_review_tg, review_id, "Обработано", review.get("owner_reply", ""), replied_at, "Владелец"
+    ))
+    await callback.message.answer(f"✅ Отзыв #{review_id} отмечен как обработанный.")
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "owner_review_cancel")
+async def cb_owner_review_cancel(callback: CallbackQuery):
+    if callback.from_user.id == OWNER_ID:
+        set_step(callback.from_user.id, "idle")
+        await callback.message.answer("Ответ отменён.")
+    await callback.answer()
+
+
+@dp.message(Command("reply"))
+async def cmd_reply_user(message: Message):
+    """Резервный ответ на старый отзыв: /reply USER_ID текст ответа"""
+    if message.from_user.id != OWNER_ID:
+        return
+    parts = (message.text or "").split(maxsplit=2)
+    if len(parts) < 3 or not parts[1].isdigit():
+        await message.answer("Формат: /reply ID_пользователя текст ответа")
+        return
+    target_user = int(parts[1])
+    reply_text = parts[2].strip()
+    try:
+        await bot.send_message(target_user, "☦️ Ответ команды проекта «С верой»\n\n" + reply_text[:3500])
+    except Exception as e:
+        await message.answer(f"⚠️ Не удалось отправить ответ: {e}")
+        return
+    replied_at = datetime.now().strftime("%d.%m.%Y %H:%M")
+    asyncio.create_task(asyncio.to_thread(
+        sheets_update_latest_review_by_user_tg,
+        target_user,
+        "Отвечено",
+        reply_text,
+        replied_at,
+        "Владелец",
+    ))
+    await message.answer(f"✅ Ответ пользователю {target_user} отправлен.")
+
 # ========== ПОЖЕРТВОВАНИЕ ==========
 @dp.callback_query(F.data.in_({"donation", "donate"}))
 async def cb_donation(callback: CallbackQuery):
@@ -3896,6 +4361,7 @@ async def handle_location(message: Message):
     lon = message.location.longitude
     set_step(message.from_user.id, "idle")
     maps_url = f"https://maps.yandex.ru/?text=православный+храм&ll={lon},{lat}&z=14"
+    await message.answer("📍 Геолокация получена.", reply_markup=ReplyKeyboardRemove())
     await message.answer(
         f"🗺️ *Православные храмы рядом с вами:*\n\n"
         f"Нажмите ссылку — откроется Яндекс.Карты\n"
@@ -3956,20 +4422,7 @@ async def handle_voice(message: Message):
                 )
             set_step(user_id, "idle")
         elif step == "review":
-            asyncio.create_task(asyncio.to_thread(
-                add_review_to_sheet, user_id,
-                message.from_user.username or "",
-                message.from_user.first_name or "", text
-            ))
-            try:
-                await bot.send_message(OWNER_ID, f"💬 Новый отзыв Telegram\n\nПользователь: {user_id}\n{text[:3000]}")
-            except Exception as e:
-                logging.error(f"Не удалось уведомить владельца об отзыве: {e}")
-            set_step(user_id, "idle")
-            await message.answer(
-                "☦️ *Спасибо за ваш отзыв!*\n\nДа хранит вас Господь 🕊️",
-                parse_mode="Markdown", reply_markup=main_menu()
-            )
+            await process_new_review(message, text)
         else:
             await message.answer(
                 "☦️ Голосовые сообщения работают только при вводе вопроса о вере.\n"
@@ -3998,6 +4451,16 @@ async def handle_text(message: Message):
     step    = user.get("step", "")
     user_id = message.from_user.id
     text    = message.text.strip()
+
+    if user_id == OWNER_ID and step.startswith("owner_review_reply:"):
+        try:
+            review_id = int(step.split(":", 1)[1])
+        except Exception:
+            set_step(user_id, "idle")
+            await message.answer("⚠️ Некорректный номер отзыва.")
+            return
+        await process_owner_review_reply(message, review_id, text)
+        return
 
     # Онбординг — имя
     if step == "onboard_name":
@@ -4215,25 +4678,7 @@ async def handle_text(message: Message):
         return
 
     if step == "review":
-        asyncio.create_task(asyncio.to_thread(
-            add_review_to_sheet,
-            user_id,
-            message.from_user.username or "",
-            message.from_user.first_name or "",
-            text
-        ))
-        try:
-            await bot.send_message(OWNER_ID, f"💬 Новый отзыв Telegram\n\nПользователь: {user_id}\n{text[:3000]}")
-        except Exception as e:
-            logging.error(f"Не удалось уведомить владельца об отзыве: {e}")
-        set_step(user_id, "idle")
-        await message.answer(
-            "☦️ *Спасибо за ваш отзыв!*\n\n"
-            "Мы обязательно его учтём при развитии проекта.\n"
-            "Да хранит вас Господь 🕊️",
-            parse_mode="Markdown",
-            reply_markup=main_menu()
-        )
+        await process_new_review(message, text)
         return
 
     # Пожертвование — ввод суммы
@@ -4338,6 +4783,7 @@ async def handle_text(message: Message):
 # ========== MAIN ==========
 async def main():
     init_db()
+    asyncio.create_task(asyncio.to_thread(ensure_review_sheet_schema_tg))
     asyncio.create_task(channel_post_loop())
     asyncio.create_task(angel_reminder_loop())
     asyncio.create_task(check_payments_loop())
