@@ -560,6 +560,27 @@ def init_db():
         name TEXT PRIMARY KEY,
         prayer TEXT
     )""")
+    # Журнал публикаций канала: переживает перезапуск и не допускает дублей.
+    c.execute("""CREATE TABLE IF NOT EXISTS channel_posts (
+        post_key TEXT PRIMARY KEY,
+        post_date TEXT NOT NULL,
+        slot TEXT NOT NULL,
+        rubric TEXT NOT NULL,
+        topic TEXT DEFAULT '',
+        content TEXT DEFAULT '',
+        status TEXT NOT NULL DEFAULT 'pending',
+        created_at TEXT NOT NULL
+    )""")
+    # Переходы из канала в бот по источникам.
+    c.execute("""CREATE TABLE IF NOT EXISTS channel_clicks (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        source TEXT NOT NULL,
+        target TEXT NOT NULL,
+        clicked_at TEXT NOT NULL
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_channel_clicks_source ON channel_clicks(source)")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_channel_posts_date ON channel_posts(post_date)")
     conn.commit()
     conn.close()
 
@@ -945,11 +966,49 @@ async def handle_start(chat_id, user_id, first_name, username, start_payload="")
         conn.commit()
         conn.close()
 
-    # Разрешаем только известные сценарии, чтобы произвольный payload не ломал бот.
+    # Deep-link источники канала. Каждый источник одновременно открывает
+    # обещанную функцию и записывается в аналитику воронки.
+    channel_routes = {
+        "ch_morning": "prayers",
+        "ch_quote": "ask_question",
+        "ch_saint": "saints",
+        "ch_guidance": "ask_question",
+        "ch_practical": "sacraments",
+        "ch_story": "saints",
+        "ch_evening": "prayer_evening_ru",
+        "ch_qa": "ask_question",
+        "ch_life": "saints",
+        "ch_film": "library",
+        "ch_gospel": "daily_gospel",
+        "ch_photo": "photo_icon",
+        "ch_church": "find_church",
+        "ch_profile": "profile",
+        "ch_calendar": "calendar",
+        "ch_showcase_prayer": "prayers",
+        "ch_showcase_photo": "photo_icon",
+        "ch_showcase_angel": "saints",
+        "ch_showcase_confession": "sacr_ispoved",
+    }
+    target_payload = channel_routes.get(start_payload)
+    if target_payload:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            conn.execute(
+                "INSERT INTO channel_clicks (user_id,source,target,clicked_at) VALUES (?,?,?,?)",
+                (user_id, start_payload, target_payload, datetime.now().isoformat()),
+            )
+            conn.commit()
+            conn.close()
+        except Exception as e:
+            logging.error(f"Не удалось записать переход из канала: {e}")
+        await handle_callback(chat_id, user_id, target_payload, first_name)
+        return
+
+    # Прямые deep-link сценарии оставлены для совместимости со старыми постами.
     allowed_payloads = {
         "prayers", "saints", "daily_gospel", "ask_question",
         "prayer_evening_ru", "library", "photo_icon", "find_church",
-        "sacraments", "calendar", "main_menu",
+        "sacraments", "calendar", "main_menu", "profile", "sacr_ispoved",
     }
     if start_payload in allowed_payloads:
         await handle_callback(chat_id, user_id, start_payload, first_name)
@@ -1739,10 +1798,9 @@ async def angel_reminder_loop_max():
             await asyncio.sleep(61)
         await asyncio.sleep(30)
 
-# ========== АВТОПОСТИНГ В КАНАЛ ==========
+# ========== АВТОПОСТИНГ В КАНАЛ — PREMIUM FUNNEL ==========
 MAX_CHANNEL_ID = -75405929805299
 MAX_BOT_URL = "https://max.ru/id232007136009_1_bot"
-
 
 # Иконы для главных праздников (Wikimedia Commons — свободные изображения)
 FEAST_ICONS = {
@@ -1824,73 +1882,82 @@ def get_icon_for_today() -> str:
     day_num = datetime.now().day
     return FEAST_ICONS.get(today_key) or DAILY_ICONS.get(day_num, DAILY_ICONS[1])
 
-# Призывы к действию для канала. Ссылка одна — официальный бот,
-# но смысл перехода и текст кнопки соответствуют каждой рубрике.
+
+def get_icon_for_date(msk_now: datetime) -> str:
+    """Икона выбирается по московской дате, а не по часовому поясу сервера."""
+    today_key = msk_now.strftime("%d.%m")
+    return FEAST_ICONS.get(today_key) or DAILY_ICONS.get(msk_now.day, DAILY_ICONS[1])
+
+
 CHANNEL_CTA = {
-    "morning": {
-        "footer": "🙏 Начните день с молитвы — в помощнике собраны утренние молитвы и молитва дня.",
-        "button": "🙏 Открыть молитвы",
-        "payload": "prayers",
-    },
-    "quote": {
-        "footer": "❓ Хотите лучше понять эту мысль? Задайте свой вопрос о вере православному помощнику.",
-        "button": "❓ Задать вопрос о вере",
-        "payload": "ask_question",
-    },
-    "saint": {
-        "footer": "👼 Узнайте о своём небесном покровителе и найдите день ангела в православном помощнике.",
-        "button": "👼 Найти святого покровителя",
-        "payload": "saints",
-    },
-    "guidance": {
-        "footer": "🕊️ Нужны поддержка или понятное объяснение? Обратитесь к православному помощнику.",
-        "button": "🕊️ Получить поддержку",
-        "payload": "ask_question",
-    },
-    "saint_story": {
-        "footer": "📸 Есть икона, о которой хочется узнать больше? Отправьте фотографию помощнику.",
-        "button": "📸 Узнать икону по фото",
-        "payload": "photo_icon",
-    },
-    "evening": {
-        "footer": "🌙 Завершите день спокойно — откройте вечерние молитвы и сохраните нужную в избранное.",
-        "button": "🌙 Открыть вечерние молитвы",
-        "payload": "prayer_evening_ru",
-    },
-    "qa": {
-        "footer": "✍️ Остался свой вопрос? Напишите его православному помощнику и выберите краткий или подробный ответ.",
-        "button": "✍️ Задать свой вопрос",
-        "payload": "ask_question",
-    },
-    "weekly_life": {
-        "footer": "👼 Найдите святого по имени и узнайте, когда совершается его память.",
-        "button": "👼 Найти святого по имени",
-        "payload": "saints",
-    },
-    "film": {
-        "footer": "📚 В православном помощнике есть книги, молитвы и полезные материалы для тех, кто хочет узнать больше.",
-        "button": "📚 Открыть библиотеку",
-        "payload": "library",
-    },
-    "default": {
-        "footer": "☦️ Молитвы, календарь, вопросы о вере и полезные материалы — в православном помощнике «С верой».",
-        "button": "☦️ Открыть помощника",
-        "payload": "main_menu",
-    },
+    "morning": ("🙏 Начните день с молитвы — откройте молитву дня и утреннее правило.", "🙏 Открыть молитвы", "ch_morning"),
+    "quote": ("❓ Хотите понять эту мысль глубже? Задайте вопрос православному помощнику.", "❓ Задать вопрос", "ch_quote"),
+    "saint": ("👼 Найдите своего небесного покровителя и узнайте дни его памяти.", "👼 Найти святого", "ch_saint"),
+    "guidance": ("❓ Расскажите, что вас волнует, и получите бережное понятное объяснение.", "❓ Обратиться к помощнику", "ch_guidance"),
+    "practical": ("⛪ Получите пошаговую памятку и подготовьтесь без страха и путаницы.", "⛪ Открыть памятку", "ch_practical"),
+    "story": ("👼 Найдите святого по имени и прочитайте о его днях памяти.", "👼 Найти святого по имени", "ch_story"),
+    "evening": ("🌙 Завершите день спокойно — откройте вечернюю молитву и сохраните её.", "🌙 Открыть вечернюю молитву", "ch_evening"),
+    "qa": ("✍️ Остался свой вопрос? Выберите краткий, подробный или глубокий ответ.", "✍️ Задать свой вопрос", "ch_qa"),
+    "life": ("👼 Узнайте о святом покровителе и найдите день ангела.", "👼 Найти святого", "ch_life"),
+    "film": ("📚 Откройте библиотеку с книгами, молитвами и материалами о вере.", "📚 Открыть библиотеку", "ch_film"),
+    "gospel": ("📖 Откройте Евангелие дня и краткое объяснение простыми словами.", "📖 Евангелие дня", "ch_gospel"),
+    "photo": ("📸 Отправьте фотографию иконы — помощник постарается определить образ.", "📸 Узнать икону по фото", "ch_photo"),
+    "church": ("🗺️ Найдите ближайший храм по городу или геолокации.", "🗺️ Найти храм", "ch_church"),
+    "showcase_prayer": ("🙏 В помощнике собраны молитвы на разные жизненные ситуации.", "🙏 Выбрать молитву", "ch_showcase_prayer"),
+    "showcase_photo": ("📸 Не знаете, кто изображён на иконе? Отправьте фотографию помощнику.", "📸 Определить икону", "ch_showcase_photo"),
+    "showcase_angel": ("👼 Укажите имя и найдите возможные дни памяти небесного покровителя.", "👼 Узнать день ангела", "ch_showcase_angel"),
+    "showcase_confession": ("📿 Впервые собираетесь на исповедь? Откройте пошаговую подготовку.", "📿 Подготовиться к исповеди", "ch_showcase_confession"),
 }
 
 
 def get_channel_cta(cta_key: str):
-    """Возвращает тематический текст и deep-link кнопку для поста канала."""
-    cta = CHANNEL_CTA.get(cta_key, CHANNEL_CTA["default"])
-    footer = "\n\n─────────────────\n" + cta["footer"]
-    deep_link = f"{MAX_BOT_URL}?start={cta['payload']}"
-    buttons = [[link_btn(cta["button"], deep_link)]]
-    return footer, buttons, deep_link
+    footer, button, source = CHANNEL_CTA.get(cta_key, CHANNEL_CTA["guidance"])
+    deep_link = f"{MAX_BOT_URL}?start={source}"
+    return "\n\n─────────────────\n" + footer, [[link_btn(button, deep_link)]], deep_link
+
+
+def channel_post_exists(post_key: str) -> bool:
+    conn = sqlite3.connect(DB_PATH)
+    row = conn.execute("SELECT status FROM channel_posts WHERE post_key=?", (post_key,)).fetchone()
+    conn.close()
+    return bool(row and row[0] == "sent")
+
+
+def save_channel_post(post_key: str, post_date: str, slot: str, rubric: str, topic: str, content: str, status: str):
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        conn.execute(
+            """INSERT OR REPLACE INTO channel_posts
+               (post_key,post_date,slot,rubric,topic,content,status,created_at)
+               VALUES (?,?,?,?,?,?,?,?)""",
+            (post_key, post_date, slot, rubric, topic[:250], content[:3900], status, datetime.now().isoformat()),
+        )
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Канал: не удалось сохранить журнал публикации: {e}")
+
+
+def recent_channel_topics(limit: int = 30) -> str:
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            "SELECT rubric,topic FROM channel_posts WHERE status='sent' ORDER BY created_at DESC LIMIT ?", (limit,)
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return ""
+        return "\n".join(f"- {rubric}: {topic}" for rubric, topic in rows if topic)
+    except Exception:
+        return ""
+
+
+def extract_topic(text: str) -> str:
+    clean = " ".join((text or "").replace("\n", " ").split())
+    return clean[:180]
 
 
 def _extract_upload_token(payload):
-    """Извлекает токен изображения из разных вариантов ответа MAX upload API."""
     if not isinstance(payload, dict):
         return ""
     if payload.get("token"):
@@ -1900,31 +1967,20 @@ def _extract_upload_token(payload):
         if isinstance(nested, dict) and nested.get("token"):
             return str(nested["token"])
     photos = payload.get("photos")
-    if isinstance(photos, dict):
-        for item in photos.values():
-            if isinstance(item, dict) and item.get("token"):
-                return str(item["token"])
-    if isinstance(photos, list):
-        for item in photos:
-            if isinstance(item, dict) and item.get("token"):
-                return str(item["token"])
+    values = photos.values() if isinstance(photos, dict) else photos if isinstance(photos, list) else []
+    for item in values:
+        if isinstance(item, dict) and item.get("token"):
+            return str(item["token"])
     return ""
 
 
 def _max_response_ok(payload):
-    """Проверяет, что MAX подтвердил создание сообщения, а не вернул ошибку."""
     if not isinstance(payload, dict) or not payload:
         return False
     raw = str(payload).lower()
     if "error" in payload or "errors" in payload or "attachment.not.ready" in raw:
         return False
-    return bool(
-        payload.get("message")
-        or payload.get("body")
-        or payload.get("timestamp")
-        or payload.get("message_id")
-        or payload.get("success") is True
-    )
+    return bool(payload.get("message") or payload.get("body") or payload.get("timestamp") or payload.get("message_id") or payload.get("success") is True)
 
 
 def _attachment_not_ready(payload):
@@ -1932,269 +1988,191 @@ def _attachment_not_ready(payload):
 
 
 async def post_to_channel(text, photo_url=None, buttons=None, deep_link=None):
-    """Отправляет пост в канал с фото и тематической deep-link кнопкой.
-
-    Изображение загружается в MAX как multipart/form-data в поле ``data``.
-    После загрузки выполняются повторы отправки, пока вложение обрабатывается.
-    При любой ошибке фото публикация сохраняется: сначала с кнопкой без фото,
-    затем, если клавиатура отклонена, с прямой deep-link ссылкой в тексте.
-    """
-    keyboard_attachment = None
-    if buttons:
-        keyboard_attachment = {
-            "type": "inline_keyboard",
-            "payload": {"buttons": buttons},
-        }
-
+    keyboard = {"type": "inline_keyboard", "payload": {"buttons": buttons}} if buttons else None
     if photo_url:
         try:
             timeout = httpx.Timeout(45.0, connect=20.0)
             async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                meta = await client.post(
-                    f"{MAX_API}/uploads?type=image",
-                    headers={"Authorization": MAX_TOKEN},
-                )
+                meta = await client.post(f"{MAX_API}/uploads?type=image", headers={"Authorization": MAX_TOKEN})
                 meta.raise_for_status()
-                meta_data = meta.json()
-                upload_url = meta_data.get("url")
+                upload_url = meta.json().get("url")
                 if not upload_url:
-                    raise RuntimeError(f"MAX не вернул upload_url: {meta_data}")
-
-                img = await client.get(photo_url)
+                    raise RuntimeError(f"MAX не вернул upload_url: {meta.text[:300]}")
+                img = await client.get(photo_url, headers={"User-Agent": "Mozilla/5.0 VeraBot/1.0"})
                 img.raise_for_status()
-                if len(img.content) < 500:
-                    raise RuntimeError("Скачанное изображение слишком маленькое")
-
-                content_type = img.headers.get("content-type", "image/jpeg").split(";")[0]
-                if not content_type.startswith("image/"):
-                    content_type = "image/jpeg"
-                extension = "png" if "png" in content_type else "jpg"
-                files = {
-                    "data": (f"channel_icon.{extension}", img.content, content_type)
-                }
-                uploaded = await client.post(upload_url, files=files)
+                if len(img.content) < 1000:
+                    raise RuntimeError("Изображение пустое или слишком маленькое")
+                ctype = img.headers.get("content-type", "image/jpeg").split(";")[0]
+                if not ctype.startswith("image/"):
+                    ctype = "image/jpeg"
+                ext = "png" if "png" in ctype else "jpg"
+                uploaded = await client.post(upload_url, files={"data": (f"icon.{ext}", img.content, ctype)})
                 uploaded.raise_for_status()
-                upload_result = uploaded.json()
-                token = _extract_upload_token(upload_result)
+                token = _extract_upload_token(uploaded.json())
                 if not token:
-                    raise RuntimeError(f"MAX не вернул токен изображения: {upload_result}")
-
+                    raise RuntimeError(f"MAX не вернул token: {uploaded.text[:300]}")
                 attachments = [{"type": "image", "payload": {"token": token}}]
-                if keyboard_attachment:
-                    attachments.append(keyboard_attachment)
+                if keyboard:
+                    attachments.append(keyboard)
                 payload = {"text": text[:4000], "attachments": attachments}
-
-                # MAX может некоторое время обрабатывать загруженное вложение.
-                # Повторяем только ошибку attachment.not.ready.
-                for attempt, delay in enumerate((1, 2, 4, 7), start=1):
-                    if attempt > 1:
+                for attempt, delay in enumerate((0, 2, 4, 7), 1):
+                    if delay:
                         await asyncio.sleep(delay)
-                    result = await max_request(
-                        "POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload
-                    )
+                    result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload)
                     if _max_response_ok(result):
-                        logging.info(
-                            f"Канал: пост с фото и deep-link CTA отправлен, попытка {attempt}"
-                        )
+                        logging.info(f"Канал: фото+CTA отправлены, попытка {attempt}")
                         return True
-                    if _attachment_not_ready(result):
-                        logging.warning(
-                            f"Канал: изображение ещё обрабатывается, попытка {attempt}: {result}"
-                        )
-                        continue
-                    logging.error(f"Канал: MAX отклонил пост с фото: {result}")
-                    break
+                    if not _attachment_not_ready(result):
+                        logging.error(f"Канал: фото отклонено MAX: {result}")
+                        break
         except Exception as e:
-            logging.error(f"Канал: фото не отправлено, использую текстовый fallback: {e}")
+            logging.error(f"Канал: ошибка изображения, перехожу к тексту: {e}")
 
-    # Первый fallback: текст + та же кликабельная deep-link кнопка.
     payload = {"text": text[:4000]}
-    if keyboard_attachment:
-        payload["attachments"] = [keyboard_attachment]
+    if keyboard:
+        payload["attachments"] = [keyboard]
     result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload)
     if _max_response_ok(result):
-        logging.info("Канал: пост с deep-link CTA отправлен без фото")
         return True
-
-    # Последний fallback: текст + видимая deep-link ссылка.
-    fallback_url = deep_link or MAX_BOT_URL
-    fallback_text = (text + f"\n\nОткрыть нужный раздел: {fallback_url}")[:4000]
-    fallback_result = await max_request(
-        "POST", f"messages?chat_id={MAX_CHANNEL_ID}", {"text": fallback_text}
-    )
-    if _max_response_ok(fallback_result):
-        logging.info("Канал: отправлен резервный пост с прямой deep-link ссылкой")
-        return True
-
-    logging.error(
-        f"Канал: публикация не отправлена. CTA={result}; fallback={fallback_result}"
-    )
-    return False
+    fallback = (text + f"\n\nОткрыть нужный раздел: {deep_link or MAX_BOT_URL}")[:4000]
+    result2 = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", {"text": fallback})
+    return _max_response_ok(result2)
 
 
-async def generate_channel_post(prompt, cta_key="default"):
+FALLBACK_POSTS = {
+    "morning": "🌅 Господи, благослови наступающий день. Даруй нам мир в сердце, мудрость в словах и силы делать добро. Помоги не осуждать, не унывать и помнить о Тебе в каждом деле. Аминь.",
+    "quote": "✝️ Мир в душе начинается с внимания к собственному сердцу. Прежде чем осудить другого, остановимся и попросим у Бога кротости и рассудительности.",
+    "saint": "📅 Сегодня Церковь вспоминает святых, которые своей жизнью показали верность Богу. Их пример напоминает: святость начинается с небольших ежедневных решений — молитвы, милосердия и честности.",
+    "guidance": "🕯️ Когда молитва не идёт, не нужно отчаиваться. Скажите Богу несколько простых слов своими словами и останьтесь в тишине. Верность важнее сильных чувств.",
+    "practical": "⛪ Первый шаг в храме не требует идеальной подготовки. Придите немного заранее, встаньте там, где удобно, и спокойно наблюдайте за службой. Если что-то непонятно, после богослужения можно вежливо спросить служителя храма.",
+    "story": "👼 Святые становились святыми не потому, что у них не было трудностей, а потому, что они снова и снова выбирали верность Богу. Их жизнь учит нас не бояться начинать заново.",
+    "evening": "🌙 Господи, благодарю Тебя за прошедший день. Прости всё, чем я согрешил словом, делом и мыслью. Сохрани моих близких и даруй нам мирный сон. Аминь.",
+    "qa": "❓ Можно ли молиться своими словами? Да. Церковные молитвы учат нас, но Господь слышит и искреннее обращение сердца. Говорите просто, честно и с доверием.",
+    "life": "📖 Жития святых напоминают, что вера раскрывается в поступках: терпении, заботе о ближнем, покаянии и молитве. Даже небольшой добрый шаг может стать началом большого внутреннего изменения.",
+    "film": "📽️ Для семейного просмотра выберите проверенный документальный фильм о православных святынях или истории монастыря. После просмотра обсудите, какая мысль особенно затронула каждого.",
+    "showcase_prayer": "🙏 Не знаете, какую молитву прочитать в тревоге, дороге, болезни или перед сном? В православном помощнике молитвы собраны по жизненным ситуациям — нужное можно открыть за несколько секунд.",
+    "showcase_photo": "📸 Иногда дома хранится икона, но семья уже не помнит, кто на ней изображён. Отправьте фотографию православному помощнику — он постарается определить образ и объяснить символы.",
+    "showcase_angel": "👼 День ангела связан с памятью святого, чьё имя человек носит в Крещении. В помощнике можно найти имя и посмотреть возможные дни памяти.",
+    "showcase_confession": "📿 Первая исповедь часто пугает неизвестностью. В помощнике есть спокойная пошаговая памятка: как подготовиться, что говорить и как проходит Таинство.",
+}
+
+
+async def generate_channel_post(prompt, cta_key, rubric):
+    history = recent_channel_topics(35)
+    history_note = f"\n\nНе повторяй эти недавние темы:\n{history}" if history else ""
+    full_prompt = prompt + history_note + "\nВ первой строке дай понятный заголовок. Не повторяй одинаковые вступления."
     try:
-        msg = claude_client.messages.create(
+        msg = await asyncio.to_thread(
+            claude_client.messages.create,
             model="claude-sonnet-4-5",
-            max_tokens=600,
+            max_tokens=650,
             system=(
-                "Ты православный помощник. Пиши тепло, кратко и душевно, "
-                "опираясь на православную традицию. Не представляйся священником. "
-                "Без лишних слов и хэштегов. Не добавляй ссылки, рекламу, подписи "
-                "про бота или призывы к действию — они будут добавлены программой."
+                "Ты редактор православного канала и православный помощник. Пиши тепло, ясно и практически, "
+                "опираясь на православную традицию. Не представляйся священником, не давай личных благословений, "
+                "не выдумывай цитаты, факты, чудеса, фильмы или церковные правила. 4–7 коротких абзацев, без хэштегов. "
+                "Не добавляй ссылки и рекламу — CTA добавит программа."
             ),
-            messages=[{"role": "user", "content": prompt}],
+            messages=[{"role": "user", "content": full_prompt}],
         )
         text = msg.content[0].text.strip()
-        footer, buttons, deep_link = get_channel_cta(cta_key)
-        return text + footer, buttons, deep_link
+        if len(text) < 60:
+            raise RuntimeError("AI вернул слишком короткий текст")
     except Exception as e:
-        logging.error(f"Ошибка генерации поста: {e}")
-        return None, None, None
+        logging.error(f"Канал: генерация {rubric} не удалась, используется fallback: {e}")
+        text = FALLBACK_POSTS.get(cta_key, FALLBACK_POSTS["guidance"])
+    footer, buttons, deep_link = get_channel_cta(cta_key)
+    return text + footer, buttons, deep_link, extract_topic(text)
+
+
+def build_daily_slots(msk_now: datetime):
+    day = msk_now.strftime("%d %B")
+    weekday = msk_now.weekday()
+    midday_rotation = {
+        0: ("церковное слово", "practical", "Объясни одно церковное слово или элемент богослужения простыми словами и приведи практический пример."),
+        1: ("вопрос новичка", "qa", "Разбери один частый вопрос человека, который недавно пришёл к вере. Дай спокойный и конкретный ответ."),
+        2: ("история святого", "story", "Расскажи проверяемый эпизод из жизни православного святого и практический урок для современного человека."),
+        3: ("храм и традиция", "church", "Расскажи об одной православной традиции или о том, как вести себя в храме. Дай 3 понятных практических шага."),
+        4: ("подготовка к Таинству", "practical", "Дай бережную практическую памятку по подготовке к исповеди, Причастию или посещению храма. Уточни, что правила согласуют со священником своего прихода."),
+        5: ("житие и пример", "story", "Расскажи краткую проверяемую историю православного святого и чему учит его пример."),
+        6: ("семейное чтение", "film", "Порекомендуй реально существующую православную книгу, фильм или документальный проект для семейного просмотра. Если не уверен в точных данных, не указывай год."),
+    }
+    midday = midday_rotation[weekday]
+    return [
+        (7, "утренняя молитва", "morning", f"Утренняя молитвенная публикация на {day}: благодарность, просьба о помощи и один простой настрой на день."),
+        (8, "мысль дня", "quote", "Передай одну проверяемую мысль святого отца без сомнительной дословной цитаты и кратко объясни её на жизненном примере."),
+        (9, "святой или праздник дня", "saint", "__DYNAMIC_SAINT__"),
+        (10, "практическая вера", "guidance", "Разбери конкретную жизненную трудность: рассеянность в молитве, тревога, обида, уныние, семейная ссора или страх. Дай 3 бережных практических шага."),
+        (12, midday[0], midday[1], midday[2]),
+        (20, "вечерняя молитва", "evening", "Вечерняя молитвенная публикация: благодарность за день, просьба о прощении и мирном сне. Коротко и тепло."),
+    ]
+
+
+def dynamic_saint_prompt(msk_now: datetime) -> str:
+    feast = get_todays_feast()
+    saints = get_todays_saints()
+    date_text = msk_now.strftime("%d.%m")
+    if feast:
+        return f"Сегодня {date_text}, праздник: {feast}. Кратко и точно объясни смысл праздника, традицию дня и один практический вывод."
+    if saints:
+        names = ", ".join(s[0] for s in saints[:2])
+        desc = saints[0][1] or ""
+        return f"Сегодня {date_text}, память: {names}. {desc}. Расскажи только проверяемые сведения и один практический урок."
+    return f"Сегодня {date_text}. Напиши календарное духовное напоминание без выдумывания святого дня."
+
+
+def special_slots(msk_now: datetime):
+    """Два демонстрационных поста в неделю + три традиционные спецрубрики."""
+    wd = msk_now.weekday()
+    slots = []
+    if wd == 1:  # вторник
+        slots.append((17, "возможности помощника: молитвы", "showcase_prayer", FALLBACK_POSTS["showcase_prayer"]))
+    elif wd == 3:  # четверг, чередуем по номеру недели
+        if int(msk_now.strftime("%W")) % 2:
+            slots.append((17, "возможности помощника: икона", "showcase_photo", FALLBACK_POSTS["showcase_photo"]))
+        else:
+            slots.append((17, "возможности помощника: исповедь", "showcase_confession", FALLBACK_POSTS["showcase_confession"]))
+    if wd == 4:
+        slots.append((11, "вопрос-ответ недели", "qa", "Выбери частый вопрос о вере, молитве или Таинствах у начинающего и дай конкретный бережный ответ."))
+    elif wd == 5:
+        slots.append((11, "житие недели", "life", "Расскажи проверяемое житие одного православного святого: путь, подвиг и значение для Церкви. Без выдуманных чудес."))
+    elif wd == 6:
+        slots.append((11, "фильм или книга недели", "film", "Порекомендуй реально существующий православный фильм, документальный проект или книгу. Укажи, кому подойдёт и почему."))
+    return slots
+
+
+async def publish_channel_slot(msk_now: datetime, hour: int, rubric: str, cta_key: str, prompt: str):
+    date_key = msk_now.strftime("%Y-%m-%d")
+    post_key = f"{date_key}_{hour:02d}_{rubric}"
+    if channel_post_exists(post_key):
+        return False
+    if prompt == "__DYNAMIC_SAINT__":
+        prompt = dynamic_saint_prompt(msk_now)
+    text, buttons, deep_link, topic = await generate_channel_post(prompt, cta_key, rubric)
+    photo = get_icon_for_date(msk_now) if cta_key in {"saint", "life"} else None
+    ok = await post_to_channel(text, photo, buttons, deep_link)
+    save_channel_post(post_key, date_key, f"{hour:02d}:00", rubric, topic, text, "sent" if ok else "failed")
+    if ok:
+        logging.info(f"Канал: успешно опубликовано — {rubric}")
+        if hour == 7:
+            asyncio.create_task(morning_broadcast_max())
+    else:
+        logging.error(f"Канал: публикация не прошла — {rubric}; будет повторена в текущем окне")
+    return ok
 
 
 async def channel_scheduler():
-    """Автопостинг в канал по московскому времени.
-
-    Шесть ежедневных постов сохраняются. Каждый тип публикации получает
-    собственный смысловой переход и кликабельную кнопку на помощника.
-    По пятницам, субботам и воскресеньям в 11:00 выходит одна спецрубрика.
-    """
-    daily_schedule = [
-        (
-            7,
-            "утренняя молитва",
-            "morning",
-            f"Напиши пост для православного канала — утренняя молитва или благословение на день. Сегодня {date_ru('short')}. 4-5 предложений. Начни с эмодзи 🌅. В конце добавь 1-2 строки о том, какой сегодня день. Пиши только по-русски.",
-        ),
-        (
-            8,
-            "цитата святого",
-            "quote",
-            "Напиши короткий пост для православного канала — мудрая мысль православного святого или старца с кратким пояснением. Не придумывай точную цитату, если не уверен в источнике: в таком случае передай мысль без кавычек. Начни с эмодзи ✝️.",
-        ),
-        (9, "память святого", "saint", ""),
-        (
-            10,
-            "духовное наставление",
-            "guidance",
-            "Напиши короткий пост для православного канала — краткое духовное наставление или поучение святых отцов. Начни с эмодзи 🕯️.",
-        ),
-        (
-            12,
-            "история святого",
-            "saint_story",
-            "Напиши короткий пост для православного канала — трогательная или поучительная история из жизни православного святого. Не выдумывай факты и чудеса. Начни с эмодзи 👼.",
-        ),
-        (
-            20,
-            "вечерняя молитва",
-            "evening",
-            "Напиши короткий пост для православного канала — вечернее молитвенное обращение или слова утешения на конец дня. Начни с эмодзи 🌙.",
-        ),
-    ]
-
-    sent_today = set()
-    sent_day_msk = None
-
+    """Надёжный автопостинг по МСК с журналом, аналитикой и защитой от повторов."""
+    await asyncio.sleep(15)
     while True:
-        now_utc = datetime.utcnow()
-        from datetime import timedelta
-        msk_now = now_utc + timedelta(hours=3)
-        msk_hour = msk_now.hour
-        today_key = msk_now.strftime("%Y-%m-%d")
-        weekday = msk_now.weekday()
-
-        if sent_day_msk != today_key:
-            sent_today.clear()
-            sent_day_msk = today_key
-            logging.info(f"Канал: новый день по МСК {today_key}, флаги сброшены")
-
-        for hour, name, cta_key, prompt in daily_schedule:
-            key = f"{today_key}_{hour}_{name}"
-            if msk_hour == hour and msk_now.minute < 30 and key not in sent_today:
-                sent_today.add(key)
-                logging.info(f"Канал МСК {hour}:00 — {name}")
-
-                if name == "память святого":
-                    feast = get_todays_feast()
-                    saints = get_todays_saints()
-                    if feast:
-                        dynamic_prompt = (
-                            f"Напиши пост для православного канала о празднике дня: {feast}. "
-                            "Кратко объясни смысл праздника и как верующие его отмечают. "
-                            f"Начни с фразы '📅 Сегодня, {date_ru('short')}, православные христиане празднуют...'. "
-                            "Не выдумывай исторические факты. Пиши только по-русски."
-                        )
-                    elif saints:
-                        saint_names = ", ".join([s[0] for s in saints[:2]])
-                        saint_desc = saints[0][1] if saints[0][1] else ""
-                        dynamic_prompt = (
-                            f"Напиши пост для православного канала. Сегодня Церковь чтит память: {saint_names}. "
-                            f"{'Описание: ' + saint_desc if saint_desc else ''} "
-                            "Кратко расскажи о жизни святого и чему учит его пример. "
-                            f"Начни с фразы '📅 Сегодня, {date_ru('short')}, Церковь чтит память...'. "
-                            "Не выдумывай факты и чудеса."
-                        )
-                    else:
-                        dynamic_prompt = (
-                            "Напиши короткий пост для православного канала — полезное духовное напоминание на сегодня. "
-                            "Начни с эмодзи 📅."
-                        )
-                    post_text, buttons, deep_link = await generate_channel_post(
-                        dynamic_prompt, cta_key
-                    )
-                else:
-                    post_text, buttons, deep_link = await generate_channel_post(prompt, cta_key)
-
-                if post_text:
-                    photo_url = get_icon_for_today() if name == "память святого" else None
-                    await post_to_channel(post_text, photo_url, buttons, deep_link)
-                    if hour == 7:
-                        asyncio.create_task(morning_broadcast_max())
-                await asyncio.sleep(60)
-
-        weekly_name = None
-        weekly_cta = None
-        weekly_prompt = None
-        if weekday == 4:
-            weekly_name = "вопрос-ответ"
-            weekly_cta = "qa"
-            weekly_prompt = (
-                "Напиши пост для православного канала в формате вопрос-ответ. "
-                "Выбери частый вопрос о вере, молитве или Таинствах у человека, который только приходит к вере. "
-                "Дай тёплый и понятный ответ. Не представляйся священником. Начни с эмодзи ❓."
-            )
-        elif weekday == 5:
-            weekly_name = "житие недели"
-            weekly_cta = "weekly_life"
-            weekly_prompt = (
-                "Напиши пост для православного канала — развёрнутое житие православного святого. "
-                "Расскажи проверяемую историю: подвиг и значение для Церкви, без выдуманных чудес. "
-                "5-7 предложений. Начни с эмодзи 📖."
-            )
-        elif weekday == 6:
-            weekly_name = "фильм недели"
-            weekly_cta = "film"
-            weekly_prompt = (
-                "Напиши пост для православного канала — рекомендацию православного или документального фильма о вере. "
-                "Укажи название, год, краткое описание и почему стоит посмотреть. Не выдумывай фильм. "
-                "Начни с эмодзи 📽️."
-            )
-
-        if weekly_name and msk_hour == 11 and msk_now.minute < 30:
-            key = f"{today_key}_11_{weekly_name}"
-            if key not in sent_today:
-                sent_today.add(key)
-                logging.info(f"Канал МСК 11:00 — {weekly_name}")
-                post_text, buttons, deep_link = await generate_channel_post(
-                    weekly_prompt, weekly_cta
-                )
-                if post_text:
-                    photo_url = get_icon_for_today() if weekly_name == "житие недели" else None
-                    await post_to_channel(post_text, photo_url, buttons, deep_link)
-                await asyncio.sleep(60)
-
+        try:
+            msk_now = datetime.utcnow() + timedelta(hours=3)
+            slots = build_daily_slots(msk_now) + special_slots(msk_now)
+            for hour, rubric, cta_key, prompt in slots:
+                if msk_now.hour == hour and msk_now.minute < 30:
+                    await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
+                    await asyncio.sleep(3)
+        except Exception as e:
+            logging.exception(f"Канал: ошибка планировщика: {e}")
         await asyncio.sleep(30)
 
 # ========== FASTAPI ==========
