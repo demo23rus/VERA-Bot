@@ -6,7 +6,7 @@ import os
 import base64
 import httpx
 import uuid
-from datetime import datetime, date
+from datetime import datetime, date, timedelta
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 from openai import AsyncOpenAI
@@ -1657,6 +1657,52 @@ async def handle_text(chat_id, user_id, text, first_name=""):
         await handle_start(chat_id, user_id, first_name, "")
         return
 
+    # Диагностика MAX-канала доступна только владельцу.
+    owner_command = text.strip().lower()
+    if int(user_id) == int(OWNER_ID) and owner_command in {
+        "/channel_status", "канал статус"
+    }:
+        msk_now = datetime.utcnow() + timedelta(hours=3)
+        rows = channel_posts_today(msk_now)
+        if rows:
+            journal = "\n".join(
+                f"• {slot} — {rubric}: {status}"
+                for slot, rubric, status, _ in rows[-20:]
+            )
+        else:
+            journal = "Сегодня в журнале ещё нет публикаций."
+        await send_message(
+            chat_id,
+            "📊 Статус MAX-канала\n\n"
+            f"Канал ID: {MAX_CHANNEL_ID}\n"
+            f"Московское время: {msk_now.strftime('%d.%m.%Y %H:%M')}\n\n"
+            f"{journal}\n\n"
+            "Для живой проверки отправьте /channel_test"
+        )
+        return
+
+    if int(user_id) == int(OWNER_ID) and owner_command in {
+        "/channel_test", "канал тест"
+    }:
+        footer, buttons, deep_link = get_channel_cta("guidance")
+        test_text = (
+            "🧪 Проверка публикации канала\n\n"
+            "Если вы видите это сообщение, бот имеет доступ к каналу, "
+            "а текст и кликабельная кнопка отправляются корректно."
+            + footer
+        )
+        ok = await post_to_channel(
+            test_text, None, buttons, deep_link
+        )
+        await send_message(
+            chat_id,
+            "✅ Тестовый пост отправлен в канал."
+            if ok else
+            "⚠️ MAX не подтвердил отправку тестового поста. "
+            "Проверьте журнал службы и права бота в канале."
+        )
+        return
+
     # Ручной ответ по MAX ID — нужен и для отзывов, оставленных до обновления.
     # Формат: /reply 150083051 Текст ответа пользователю
     if int(user_id) == int(OWNER_ID) and text.strip().lower().startswith("/reply "):
@@ -2511,39 +2557,127 @@ def special_slots(msk_now: datetime):
     return slots
 
 
+CHANNEL_PUBLISH_LOCK = asyncio.Lock()
+
+
 async def publish_channel_slot(msk_now: datetime, hour: int, rubric: str, cta_key: str, prompt: str):
+    """Публикует один слот и фиксирует успех только после подтверждения MAX."""
+    async with CHANNEL_PUBLISH_LOCK:
+        date_key = msk_now.strftime("%Y-%m-%d")
+        post_key = f"{date_key}_{hour:02d}_{rubric}"
+        if channel_post_exists(post_key):
+            return False
+        if prompt == "__DYNAMIC_SAINT__":
+            prompt = dynamic_saint_prompt(msk_now)
+        text, buttons, deep_link, topic = await generate_channel_post(prompt, cta_key, rubric)
+        photo = get_icon_for_date(msk_now) if cta_key in {"saint", "life"} else None
+        ok = await post_to_channel(text, photo, buttons, deep_link)
+        save_channel_post(
+            post_key, date_key, f"{hour:02d}:00", rubric,
+            topic, text, "sent" if ok else "failed"
+        )
+        if ok:
+            logging.info(f"Канал: успешно опубликовано — {rubric}")
+            if hour == 7:
+                asyncio.create_task(morning_broadcast_max())
+        else:
+            logging.error(
+                f"Канал: публикация не прошла — {rubric}; "
+                "будет повторена в текущем окне"
+            )
+        return ok
+
+
+def channel_posts_today(msk_now: datetime):
+    """Возвращает журнал публикаций канала за московскую дату."""
+    try:
+        date_key = msk_now.strftime("%Y-%m-%d")
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            """SELECT slot,rubric,status,created_at
+               FROM channel_posts
+               WHERE post_date=?
+               ORDER BY slot,created_at""",
+            (date_key,),
+        ).fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        logging.error(f"Канал: не удалось прочитать журнал: {e}")
+        return []
+
+
+async def publish_latest_missed_slot(msk_now: datetime):
+    """После перезапуска публикует один самый свежий пропущенный слот.
+
+    Старые утренние посты пачкой не догоняются: выбирается только последний
+    актуальный слот, который уже должен был выйти к текущему времени.
+    """
+    slots = build_daily_slots(msk_now) + special_slots(msk_now)
+    due_slots = [slot for slot in slots if slot[0] <= msk_now.hour]
+    due_slots.sort(key=lambda slot: slot[0], reverse=True)
     date_key = msk_now.strftime("%Y-%m-%d")
-    post_key = f"{date_key}_{hour:02d}_{rubric}"
-    if channel_post_exists(post_key):
-        return False
-    if prompt == "__DYNAMIC_SAINT__":
-        prompt = dynamic_saint_prompt(msk_now)
-    text, buttons, deep_link, topic = await generate_channel_post(prompt, cta_key, rubric)
-    photo = get_icon_for_date(msk_now) if cta_key in {"saint", "life"} else None
-    ok = await post_to_channel(text, photo, buttons, deep_link)
-    save_channel_post(post_key, date_key, f"{hour:02d}:00", rubric, topic, text, "sent" if ok else "failed")
-    if ok:
-        logging.info(f"Канал: успешно опубликовано — {rubric}")
-        if hour == 7:
-            asyncio.create_task(morning_broadcast_max())
-    else:
-        logging.error(f"Канал: публикация не прошла — {rubric}; будет повторена в текущем окне")
-    return ok
+    for hour, rubric, cta_key, prompt in due_slots:
+        post_key = f"{date_key}_{hour:02d}_{rubric}"
+        if not channel_post_exists(post_key):
+            logging.info(
+                f"Канал: восстановление после запуска — {hour:02d}:00, {rubric}"
+            )
+            return await publish_channel_slot(
+                msk_now, hour, rubric, cta_key, prompt
+            )
+    logging.info("Канал: пропущенных актуальных публикаций нет")
+    return False
 
 
 async def channel_scheduler():
-    """Надёжный автопостинг по МСК с журналом, аналитикой и защитой от повторов."""
+    """Автопостинг MAX по МСК с восстановлением после перезапуска."""
     await asyncio.sleep(15)
+    last_error_notice = None
+
+    # Критично: раньше здесь возникал NameError из-за отсутствующего timedelta,
+    # поэтому цикл не доходил до публикаций. Теперь время вычисляется корректно,
+    # а после старта выпускается один последний пропущенный пост.
+    try:
+        startup_msk = datetime.utcnow() + timedelta(hours=3)
+        await publish_latest_missed_slot(startup_msk)
+    except Exception as e:
+        logging.exception(f"Канал: ошибка восстановления после запуска: {e}")
+        try:
+            await send_message(
+                OWNER_ID,
+                "⚠️ Канал MAX не смог восстановить публикацию после запуска.\n\n"
+                f"Ошибка: {str(e)[:700]}"
+            )
+        except Exception:
+            pass
+
     while True:
         try:
             msk_now = datetime.utcnow() + timedelta(hours=3)
             slots = build_daily_slots(msk_now) + special_slots(msk_now)
             for hour, rubric, cta_key, prompt in slots:
                 if msk_now.hour == hour and msk_now.minute < 30:
-                    await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
+                    await publish_channel_slot(
+                        msk_now, hour, rubric, cta_key, prompt
+                    )
                     await asyncio.sleep(3)
         except Exception as e:
             logging.exception(f"Канал: ошибка планировщика: {e}")
+            now = datetime.utcnow()
+            if (
+                last_error_notice is None
+                or now - last_error_notice >= timedelta(hours=1)
+            ):
+                last_error_notice = now
+                try:
+                    await send_message(
+                        OWNER_ID,
+                        "⚠️ Ошибка автопостинга в MAX-канал.\n\n"
+                        f"{str(e)[:700]}"
+                    )
+                except Exception:
+                    pass
         await asyncio.sleep(30)
 
 # ========== FASTAPI ==========
