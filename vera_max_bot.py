@@ -1,5 +1,6 @@
 import asyncio
 import random
+import re
 import sqlite3
 import logging
 import os
@@ -2501,23 +2502,23 @@ def select_channel_visual(msk_now: datetime, hour: int, cta_key: str, rubric: st
 
 
 CHANNEL_CTA = {
-    "morning": ("🙏 Начните день с молитвы — откройте молитву дня и утреннее правило.", "🙏 Открыть молитвы", "ch_morning"),
-    "quote": ("❓ Хотите понять эту мысль глубже? Задайте вопрос православному помощнику.", "❓ Задать вопрос", "ch_quote"),
-    "saint": ("👼 Найдите своего небесного покровителя и узнайте дни его памяти.", "👼 Найти святого", "ch_saint"),
-    "guidance": ("❓ Расскажите, что вас волнует, и получите бережное понятное объяснение.", "❓ Обратиться к помощнику", "ch_guidance"),
-    "practical": ("⛪ Получите пошаговую памятку и подготовьтесь без страха и путаницы.", "⛪ Открыть памятку", "ch_practical"),
-    "story": ("👼 Найдите святого по имени и прочитайте о его днях памяти.", "👼 Найти святого по имени", "ch_story"),
-    "evening": ("🌙 Завершите день спокойно — откройте вечернюю молитву и сохраните её.", "🌙 Открыть вечернюю молитву", "ch_evening"),
-    "qa": ("✍️ Остался свой вопрос? Выберите краткий, подробный или глубокий ответ.", "✍️ Задать свой вопрос", "ch_qa"),
-    "life": ("👼 Узнайте о святом покровителе и найдите день ангела.", "👼 Найти святого", "ch_life"),
-    "film": ("📚 Откройте библиотеку с книгами, молитвами и материалами о вере.", "📚 Открыть библиотеку", "ch_film"),
-    "gospel": ("📖 Откройте Евангелие дня и краткое объяснение простыми словами.", "📖 Евангелие дня", "ch_gospel"),
-    "photo": ("📸 Отправьте фотографию иконы — помощник постарается определить образ.", "📸 Узнать икону по фото", "ch_photo"),
-    "church": ("🗺️ Найдите ближайший храм по городу или геолокации.", "🗺️ Найти храм", "ch_church"),
-    "showcase_prayer": ("🙏 В помощнике собраны молитвы на разные жизненные ситуации.", "🙏 Выбрать молитву", "ch_showcase_prayer"),
-    "showcase_photo": ("📸 Не знаете, кто изображён на иконе? Отправьте фотографию помощнику.", "📸 Определить икону", "ch_showcase_photo"),
-    "showcase_angel": ("👼 Укажите имя и найдите возможные дни памяти небесного покровителя.", "👼 Узнать день ангела", "ch_showcase_angel"),
-    "showcase_confession": ("📿 Впервые собираетесь на исповедь? Откройте пошаговую подготовку.", "📿 Подготовиться к исповеди", "ch_showcase_confession"),
+    "morning": ("🙏 Откройте молитву дня в помощнике.", "🙏 Открыть молитвы", "ch_morning"),
+    "quote": ("❓ Хотите разобраться глубже? Спросите помощника.", "❓ Задать вопрос", "ch_quote"),
+    "saint": ("👼 Найдите святого и возможные дни его памяти.", "👼 Найти святого", "ch_saint"),
+    "guidance": ("❓ Расскажите помощнику, что сейчас волнует.", "❓ Обратиться к помощнику", "ch_guidance"),
+    "practical": ("⛪ Откройте пошаговую памятку в помощнике.", "⛪ Открыть памятку", "ch_practical"),
+    "story": ("👼 Найдите святого по имени и дням памяти.", "👼 Найти святого", "ch_story"),
+    "evening": ("🌙 Откройте вечернюю молитву.", "🌙 Вечерняя молитва", "ch_evening"),
+    "qa": ("✍️ Задайте помощнику свой вопрос.", "✍️ Задать вопрос", "ch_qa"),
+    "life": ("👼 Узнайте о святом и своём дне ангела.", "👼 Найти святого", "ch_life"),
+    "film": ("📚 Откройте православную библиотеку.", "📚 Открыть библиотеку", "ch_film"),
+    "gospel": ("📖 Откройте Евангелие дня.", "📖 Евангелие дня", "ch_gospel"),
+    "photo": ("📸 Отправьте фото иконы помощнику.", "📸 Узнать икону", "ch_photo"),
+    "church": ("🗺️ Найдите ближайший храм.", "🗺️ Найти храм", "ch_church"),
+    "showcase_prayer": ("🙏 Выберите молитву по своей ситуации.", "🙏 Выбрать молитву", "ch_showcase_prayer"),
+    "showcase_photo": ("📸 Отправьте фото иконы для определения образа.", "📸 Определить икону", "ch_showcase_photo"),
+    "showcase_angel": ("👼 Найдите возможные дни памяти покровителя.", "👼 Узнать день ангела", "ch_showcase_angel"),
+    "showcase_confession": ("📿 Откройте спокойную подготовку к исповеди.", "📿 Подготовиться", "ch_showcase_confession"),
 }
 
 
@@ -2600,6 +2601,7 @@ def _attachment_not_ready(payload):
 
 async def post_to_channel(text, photo_url=None, buttons=None, deep_link=None):
     """Отправляет пост в MAX; для изображения пробует несколько резервных URL."""
+    text = clean_channel_markup(text)
     keyboard = {"type": "inline_keyboard", "payload": {"buttons": buttons}} if buttons else None
     photo_candidates = photo_url if isinstance(photo_url, (list, tuple)) else ([photo_url] if photo_url else [])
 
@@ -2660,6 +2662,144 @@ async def post_to_channel(text, photo_url=None, buttons=None, deep_link=None):
     return _max_response_ok(result2)
 
 
+
+CHANNEL_TITLE_EMOJI = {
+    "morning": "🌅", "quote": "✝️", "saint": "👼", "guidance": "🕯️",
+    "practical": "⛪", "story": "📖", "evening": "🌙", "qa": "❓",
+    "life": "📖", "film": "📚", "gospel": "📖", "photo": "📸",
+    "church": "⛪", "showcase_prayer": "🙏", "showcase_photo": "📸",
+    "showcase_angel": "👼", "showcase_confession": "📿",
+}
+
+CHANNEL_FALLBACK_TITLES = {
+    "morning": "Доброе начало дня",
+    "quote": "Мысль, которую стоит сохранить",
+    "saint": "Святой или праздник дня",
+    "guidance": "Когда сердцу непросто",
+    "practical": "Практическая вера",
+    "story": "История, которая укрепляет",
+    "evening": "Завершим день с молитвой",
+    "qa": "Вопрос, который задают многие",
+    "life": "Житие и пример веры",
+    "film": "Что посмотреть или прочитать",
+    "gospel": "Евангелие дня",
+    "photo": "Как узнать образ на иконе",
+    "church": "Храм и православная традиция",
+    "showcase_prayer": "Молитва рядом в нужный момент",
+    "showcase_photo": "Не знаете, кто изображён на иконе?",
+    "showcase_angel": "Как узнать своего небесного покровителя",
+    "showcase_confession": "Как подготовиться к первой исповеди",
+}
+
+
+def clean_channel_markup(text: str) -> str:
+    """Убирает сырой Markdown и технические символы из публикации канала."""
+    value = (text or "").replace("\r\n", "\n").replace("\r", "\n")
+    value = re.sub(r"```.*?```", "", value, flags=re.S)
+    value = re.sub(r"\*\*(.*?)\*\*", r"\1", value, flags=re.S)
+    value = re.sub(r"__(.*?)__", r"\1", value, flags=re.S)
+    value = re.sub(r"(?<!\*)\*([^*\n]+)\*(?!\*)", r"\1", value)
+    value = re.sub(r"(?<!_)_([^_\n]+)_(?!_)", r"\1", value)
+    value = value.replace("`", "")
+    value = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", value)
+    value = re.sub(r"(?m)^\s*[-*]\s+", "• ", value)
+    value = re.sub(r"https?://\S+", "", value)
+    value = re.sub(r"[ \t]+", " ", value)
+    value = re.sub(r"\n[ \t]+", "\n", value)
+    value = re.sub(r"\n{3,}", "\n\n", value)
+    return value.strip()
+
+
+def _shorten_at_sentence(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text.strip()
+    chunk = text[:limit].rstrip()
+    boundaries = [chunk.rfind(". "), chunk.rfind("! "), chunk.rfind("? "), chunk.rfind("\n\n")]
+    cut = max(boundaries)
+    if cut >= int(limit * 0.62):
+        chunk = chunk[:cut + 1]
+    else:
+        chunk = chunk.rsplit(" ", 1)[0]
+    return chunk.rstrip(" ,;:") + "…"
+
+
+def _split_readable_paragraphs(paragraphs, max_paragraph_len: int = 330):
+    result = []
+    for paragraph in paragraphs:
+        paragraph = " ".join(paragraph.split()).strip()
+        if not paragraph:
+            continue
+        if len(paragraph) <= max_paragraph_len:
+            result.append(paragraph)
+            continue
+        sentences = re.split(r"(?<=[.!?…])\s+", paragraph)
+        current = ""
+        for sentence in sentences:
+            candidate = f"{current} {sentence}".strip()
+            if current and len(candidate) > max_paragraph_len:
+                result.append(current)
+                current = sentence
+            else:
+                current = candidate
+        if current:
+            result.append(current)
+    return result
+
+
+def polish_channel_text(
+    text: str,
+    cta_key: str,
+    rubric: str,
+    *,
+    has_visual: bool = False,
+    platform: str = "max",
+) -> str:
+    """Делает AI-текст похожим на отредактированную публикацию, а не на сырой ответ модели."""
+    cleaned = clean_channel_markup(text)
+    paragraphs = [p.strip() for p in re.split(r"\n\s*\n", cleaned) if p.strip()]
+    fallback_title = CHANNEL_FALLBACK_TITLES.get(cta_key, rubric.capitalize())
+
+    title = ""
+    body_paragraphs = paragraphs[:]
+    if paragraphs:
+        candidate = " ".join(paragraphs[0].split()).strip(" —–-:;,.\"«»")
+        looks_like_title = len(candidate) <= 92 and candidate.count(".") <= 1 and "\n" not in candidate
+        if looks_like_title:
+            title = candidate
+            body_paragraphs = paragraphs[1:]
+    if not title:
+        title = fallback_title
+
+    # Не позволяем модели превращать заголовок в назидательную длинную фразу.
+    if len(title) > 92:
+        title = fallback_title
+    title = title.strip(" —–-:;,.\"«»")
+    emoji = CHANNEL_TITLE_EMOJI.get(cta_key, "☦️")
+    if not title.startswith(tuple(CHANNEL_TITLE_EMOJI.values())):
+        title = f"{emoji} {title}"
+
+    body_paragraphs = _split_readable_paragraphs(body_paragraphs)
+    # Заголовок + максимум пять коротких смысловых абзацев.
+    body_paragraphs = body_paragraphs[:5]
+    if not body_paragraphs and cleaned:
+        source = cleaned
+        if source.startswith(title.replace(f"{emoji} ", "")):
+            source = source[len(title.replace(f"{emoji} ", "")):].lstrip(" .:—-\n")
+        if source:
+            body_paragraphs = _split_readable_paragraphs([source])[:5]
+
+    result = title
+    if body_paragraphs:
+        result += "\n\n" + "\n\n".join(body_paragraphs)
+
+    if platform == "telegram":
+        max_chars = 760 if has_visual else 1180
+    else:
+        max_chars = 1180 if has_visual else 1350
+    result = _shorten_at_sentence(result, max_chars)
+    return clean_channel_markup(result)
+
+
 FALLBACK_POSTS = {
     "morning": "🌅 Господи, благослови наступающий день. Даруй нам мир в сердце, мудрость в словах и силы делать добро. Помоги не осуждать, не унывать и помнить о Тебе в каждом деле. Аминь.",
     "quote": "✝️ Мир в душе начинается с внимания к собственному сердцу. Прежде чем осудить другого, остановимся и попросим у Бога кротости и рассудительности.",
@@ -2682,17 +2822,26 @@ async def generate_channel_post(prompt, cta_key, rubric, visual_prompt_note="", 
     history = recent_channel_topics(35)
     history_note = f"\n\nНе повторяй эти недавние темы:\n{history}" if history else ""
     visual_note = f"\n\n{visual_prompt_note}" if visual_prompt_note else ""
-    full_prompt = prompt + visual_note + history_note + "\nВ первой строке дай понятный заголовок. Не повторяй одинаковые вступления."
+    length_rule = "700–1050" if visual_prompt_note else "850–1250"
+    full_prompt = (
+        prompt + visual_note + history_note +
+        f"\nНапиши редакционный пост объёмом {length_rule} символов. "
+        "Первая строка — мягкий живой заголовок до 70 символов. "
+        "Затем 3–5 коротких абзацев: одна понятная мысль, один жизненный пример и практический вывод. "
+        "Не используй Markdown, звёздочки, решётки, обратные кавычки, ссылки и хэштеги. "
+        "Не пиши стену текста и не повторяй одинаковые вступления."
+    )
     try:
         msg = await asyncio.to_thread(
             claude_client.messages.create,
             model="claude-sonnet-4-5",
-            max_tokens=650,
+            max_tokens=500,
             system=(
-                "Ты редактор православного канала и православный помощник. Пиши тепло, ясно и практически, "
-                "опираясь на православную традицию. Не представляйся священником, не давай личных благословений, "
-                "не выдумывай цитаты, факты, чудеса, фильмы или церковные правила. 4–7 коротких абзацев, без хэштегов. "
-                "Не добавляй ссылки и рекламу — CTA добавит программа."
+                "Ты редактор премиального православного медиа. Пиши тепло, спокойно, человечно и без назидательного тона. "
+                "Опирайся на православную традицию. Не представляйся священником, не давай личных благословений, "
+                "не выдумывай цитаты, факты, чудеса, фильмы или церковные правила. "
+                "Каждый абзац должен быть коротким и легко читаться с телефона. "
+                "Не добавляй рекламу: компактный CTA добавит программа. Не используй Markdown-разметку."
             ),
             messages=[{"role": "user", "content": full_prompt}],
         )
@@ -2702,8 +2851,14 @@ async def generate_channel_post(prompt, cta_key, rubric, visual_prompt_note="", 
     except Exception as e:
         logging.error(f"Канал: генерация {rubric} не удалась, используется fallback: {e}")
         text = FALLBACK_POSTS.get(cta_key, FALLBACK_POSTS["guidance"])
+
+    text = polish_channel_text(
+        text, cta_key, rubric,
+        has_visual=bool(visual_prompt_note or visual_title),
+        platform="max",
+    )
     footer, buttons, deep_link = get_channel_cta(cta_key)
-    visual_line = f"\n\n🖼️ На изображении: {visual_title}" if visual_title else ""
+    visual_line = f"\n\n🖼️ На изображении: {clean_channel_markup(visual_title)}" if visual_title else ""
     return text + visual_line + footer, buttons, deep_link, extract_topic(text)
 
 
@@ -2818,27 +2973,50 @@ def channel_posts_today(msk_now: datetime):
         return []
 
 
-async def publish_latest_missed_slot(msk_now: datetime):
-    """После перезапуска публикует один самый свежий пропущенный слот.
+def select_catchup_channel_slot(msk_now: datetime):
+    """Выбирает один актуальный пропущенный слот, отдавая приоритет визуалу.
 
-    Старые утренние посты пачкой не догоняются: выбирается только последний
-    актуальный слот, который уже должен был выйти к текущему времени.
+    Более старый текстовый пост не догоняется, если более поздний слот уже
+    отмечен успешным. Это исключает появление утренней «стены текста» после
+    рестарта в середине дня.
     """
-    slots = build_daily_slots(msk_now) + special_slots(msk_now)
+    slots = sorted(build_daily_slots(msk_now) + special_slots(msk_now), key=lambda item: item[0])
     due_slots = [slot for slot in slots if slot[0] <= msk_now.hour]
-    due_slots.sort(key=lambda slot: slot[0], reverse=True)
     date_key = msk_now.strftime("%Y-%m-%d")
-    for hour, rubric, cta_key, prompt in due_slots:
+    sent_rows = channel_posts_today(msk_now)
+    sent_hours = []
+    for slot, _rubric, status, _created in sent_rows:
+        if status == "sent":
+            try:
+                sent_hours.append(int(str(slot).split(":", 1)[0]))
+            except Exception:
+                pass
+    latest_sent_hour = max(sent_hours, default=-1)
+
+    eligible = []
+    for slot in due_slots:
+        hour, rubric, cta_key, _prompt = slot
         post_key = f"{date_key}_{hour:02d}_{rubric}"
-        if not channel_post_exists(post_key):
-            logging.info(
-                f"Канал: восстановление после запуска — {hour:02d}:00, {rubric}"
-            )
-            return await publish_channel_slot(
-                msk_now, hour, rubric, cta_key, prompt
-            )
-    logging.info("Канал: пропущенных актуальных публикаций нет")
-    return False
+        if hour <= latest_sent_hour or channel_post_exists(post_key):
+            continue
+        eligible.append(slot)
+    if not eligible:
+        return None
+
+    recent = [slot for slot in eligible if msk_now.hour - slot[0] <= 2] or [eligible[-1]]
+    visual = [slot for slot in recent if select_channel_visual(msk_now, slot[0], slot[2], slot[1])]
+    return max(visual or recent, key=lambda item: item[0])
+
+
+async def publish_latest_missed_slot(msk_now: datetime):
+    """После перезапуска выпускает только один актуальный пропущенный пост."""
+    slot = select_catchup_channel_slot(msk_now)
+    if slot is None:
+        logging.info("Канал: актуальных пропущенных публикаций нет")
+        return False
+    hour, rubric, cta_key, prompt = slot
+    logging.info(f"Канал: восстановление после запуска — {hour:02d}:00, {rubric}")
+    return await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
 
 
 async def channel_scheduler():
