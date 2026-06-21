@@ -7,6 +7,8 @@ import os
 import base64
 import httpx
 import uuid
+import hashlib
+from pathlib import Path
 from datetime import datetime, date, timedelta
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -43,6 +45,8 @@ MAX_TOKEN     = _env.get("MAX_TOKEN") or os.environ.get("MAX_TOKEN", "")
 MAX_API       = "https://platform-api.max.ru"
 OPENAI_KEY    = _env.get("OPENAI_KEY") or os.environ.get("OPENAI_KEY", "")
 ANTHROPIC_KEY = _env.get("ANTHROPIC_KEY") or os.environ.get("ANTHROPIC_KEY", "")
+CHANNEL_IMAGE_MODEL = _env.get("CHANNEL_IMAGE_MODEL") or os.environ.get("CHANNEL_IMAGE_MODEL", "gpt-image-1")
+CHANNEL_IMAGE_DIR = "/root/vera_channel_images_max"
 OWNER_ID      = 549639607
 DB_PATH       = "/root/vera_max.db"
 WEBHOOK_URL   = "https://sveroy.ru/webhook"
@@ -70,6 +74,10 @@ async def max_request(method, endpoint, data=None):
                 r = await client.get(url, headers=headers)
             elif method == "POST":
                 r = await client.post(url, json=data, headers=headers)
+            elif method == "PUT":
+                r = await client.put(url, json=data, headers=headers)
+            elif method == "PATCH":
+                r = await client.patch(url, json=data, headers=headers)
             elif method == "DELETE":
                 r = await client.delete(url, headers=headers)
             logging.info(f"MAX {method} {endpoint}: {r.status_code}")
@@ -702,6 +710,22 @@ def init_db():
         handled_by TEXT DEFAULT ''
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_user_reviews_status ON user_reviews(status)")
+    c.execute("""CREATE TABLE IF NOT EXISTS donation_payments (
+        payment_id TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        chat_id INTEGER NOT NULL,
+        username TEXT DEFAULT '',
+        first_name TEXT DEFAULT '',
+        amount INTEGER NOT NULL,
+        platform TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        user_notified INTEGER NOT NULL DEFAULT 0,
+        owner_notified INTEGER NOT NULL DEFAULT 0,
+        sheet_recorded INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        paid_at TEXT DEFAULT ''
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_donation_payment_status ON donation_payments(status)")
     conn.commit()
     conn.close()
 
@@ -1679,7 +1703,8 @@ async def handle_text(chat_id, user_id, text, first_name=""):
             f"Московское время: {msk_now.strftime('%d.%m.%Y %H:%M')}\n\n"
             f"{journal}\n\n"
             "Для проверки текста: /channel_test\n"
-            "Для проверки изображения: /channel_image_test"
+            "Для проверки изображения: /channel_image_test\n"
+            "Для нового закрепа: /publish_channel_intro"
         )
         return
 
@@ -1713,17 +1738,28 @@ async def handle_text(chat_id, user_id, text, first_name=""):
         footer, buttons, deep_link = get_channel_cta("evening")
         test_text = (
             "🖼️ Проверка визуальной публикации\n\n"
-            "Если вы видите изображение, подпись и кнопку, визуальная система канала работает корректно."
-            f"\n\n🖼️ На изображении: {visual['title']}"
+            "Если вы видите изображение и кнопку, реальная AI-генерация и отправка в канал работают корректно."
             + footer
         )
-        ok = await post_to_channel(test_text, visual["urls"], buttons, deep_link)
+        ok = await post_to_channel(
+            test_text, visual["urls"], buttons, deep_link,
+            generation_prompt=build_channel_image_prompt(20, "evening", "тест изображения"),
+            cache_key=f"max:test:{msk_now:%Y-%m-%d}",
+            prefer_generated=True,
+        )
         await send_message(
             chat_id,
             "✅ Тестовый пост с изображением отправлен в MAX-канал."
             if ok else
             "⚠️ Не удалось подтвердить тестовую публикацию с изображением. Проверьте журнал службы."
         )
+        return
+
+    if int(user_id) == int(OWNER_ID) and owner_command in {
+        "/publish_channel_intro", "опубликовать закреп"
+    }:
+        ok, detail = await publish_and_pin_max_intro()
+        await send_message(chat_id, ("✅ " if ok else "⚠️ ") + detail)
         return
 
     # Ручной ответ по MAX ID — нужен и для отзывов, оставленных до обновления.
@@ -2028,6 +2064,7 @@ async def handle_text(chat_id, user_id, text, first_name=""):
                 },
                 "capture": True,
                 "description": "Пожертвование на развитие «С верой» во славу Божию",
+                "metadata": {"user_id": str(user_id), "platform": "MAX", "kind": "donation"},
                 "receipt": {
                     "customer": {
                         "email": "6038484@mail.ru"
@@ -2046,6 +2083,7 @@ async def handle_text(chat_id, user_id, text, first_name=""):
             }, str(uuid.uuid4()))
             set_step(user_id, "idle")
             pay_url = payment.confirmation.confirmation_url
+            save_donation_payment(payment.id, user_id, chat_id, user.get("username", ""), first_name or user.get("first_name", ""), amount, "MAX")
             await send_message(chat_id, f"🕯️ Пожертвование {amount} рублей\n\nНажмите для оплаты 👇", [
                 [link_btn("💳 Перейти к оплате", pay_url)],
                 back_main()[0],
@@ -2471,16 +2509,16 @@ def select_channel_visual(msk_now: datetime, hour: int, cta_key: str, rubric: st
             "prompt_note": f"На изображении будет «{asset['title']}». Объясни, что незнакомую икону можно сфотографировать и отправить помощнику для предварительного определения образа.",
         }
 
-    # Третий визуал дня: 12:00 в пн/ср/чт/сб/вс.
-    if hour == 12 and weekday in {0, 2, 3, 5, 6}:
+    # Третий визуал дня: 12:00 в пн/ср/чт/сб.
+    # В воскресенье 11:00 уже выходит фильм/книга недели, а 12:00 — отдельное
+    # евангельское размышление без дополнительной визуальной ветки.
+    if hour == 12 and weekday in {0, 2, 3, 5}:
         saint_only = weekday in {2, 5}
         asset = _rotating_visual(msk_now, salt=12, saint_only=saint_only)
         if weekday in {2, 5}:
             note = f"На изображении будет «{asset['title']}». Расскажи проверяемый эпизод именно из жизни этого святого и практический урок для современного человека."
         elif weekday == 3:
             note = f"На изображении будет «{asset['title']}». Объясни связанную с этим образом православную традицию, символ или правило поведения в храме."
-        elif weekday == 6:
-            note = f"На изображении будет «{asset['title']}». Порекомендуй реально существующую книгу, фильм или документальный материал, напрямую связанный с этим святым, праздником или темой."
         else:
             note = f"На изображении будет «{asset['title']}». Объясни один церковный термин, символ или практику, которые естественно связаны с этим образом."
         return {
@@ -2599,68 +2637,187 @@ def _attachment_not_ready(payload):
     return "attachment.not.ready" in str(payload).lower()
 
 
-async def post_to_channel(text, photo_url=None, buttons=None, deep_link=None):
-    """Отправляет пост в MAX; для изображения пробует несколько резервных URL."""
-    text = clean_channel_markup(text)
-    keyboard = {"type": "inline_keyboard", "payload": {"buttons": buttons}} if buttons else None
+
+def _channel_visual_cache_path(cache_key: str) -> str:
+    os.makedirs(CHANNEL_IMAGE_DIR, exist_ok=True)
+    digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:24]
+    return os.path.join(CHANNEL_IMAGE_DIR, f"{digest}.png")
+
+
+def build_channel_image_prompt(hour: int, cta_key: str, rubric: str) -> str:
+    common = (
+        "Premium square editorial image for a calm Russian Orthodox Christian media channel. "
+        "Photorealistic, tasteful, warm natural light, deep detail, no text, no letters, no logo, "
+        "no watermark, no advertising, no human faces, respectful atmosphere. "
+        "Do not imitate a canonical icon and do not depict a specific saint. "
+    )
+    if hour == 7 or cta_key == "morning":
+        return common + "Dawn outside a beautiful Orthodox church, soft golden sunrise, peaceful sky, subtle mist, hopeful beginning of the day."
+    if hour == 20 or cta_key == "evening":
+        return common + "Quiet candlelit Orthodox church interior at evening, open prayer book, warm lampada light, contemplative and peaceful mood."
+    if cta_key in {"gospel", "quote"}:
+        return common + "Open Gospel book on a wooden lectern, candlelight, soft church background, contemplative Sunday atmosphere."
+    if cta_key in {"practical", "guidance", "qa", "showcase_confession"}:
+        return common + "Prayer book, simple wooden cross, candle and notebook on a clean table near a church window, practical and reassuring mood."
+    if cta_key in {"church", "showcase_prayer"}:
+        return common + "Beautiful Orthodox church exterior and a quiet path leading to it, warm daylight, welcoming and trustworthy mood."
+    if cta_key == "film":
+        return common + "A book, subtle film reel and candle on a wooden table, Orthodox church interior softly blurred in the background."
+    return common + f"Atmospheric Orthodox church scene related to the theme: {rubric}."
+
+
+async def generate_channel_image_bytes(prompt: str, cache_key: str):
+    """Реальная AI-генерация изображения с локальным кэшем."""
+    if not OPENAI_KEY or not prompt:
+        return None
+    path = _channel_visual_cache_path(cache_key)
+    try:
+        if os.path.exists(path) and os.path.getsize(path) > 5000:
+            return Path(path).read_bytes()
+    except Exception:
+        pass
+    models = []
+    for model in (CHANNEL_IMAGE_MODEL, "gpt-image-1-mini"):
+        if model and model not in models:
+            models.append(model)
+    for model in models:
+        try:
+            result = await asyncio.wait_for(
+                openai_client.images.generate(
+                    model=model,
+                    prompt=prompt,
+                    size="1024x1024",
+                    quality="medium",
+                ),
+                timeout=150,
+            )
+            encoded = result.data[0].b64_json if result.data else None
+            if not encoded:
+                raise RuntimeError("API не вернул b64_json")
+            data = base64.b64decode(encoded)
+            if len(data) < 5000:
+                raise RuntimeError("Сгенерированное изображение слишком маленькое")
+            Path(path).write_bytes(data)
+            logging.info(f"Канал: AI-изображение создано и сохранено, model={model}")
+            return data
+        except Exception as e:
+            logging.error(f"Канал: AI-генерация изображения не удалась, model={model}: {e}")
+    return None
+
+
+def _extract_message_id(payload):
+    if not isinstance(payload, dict):
+        return ""
+    if payload.get("message_id"):
+        return str(payload["message_id"])
+    body = payload.get("body")
+    if isinstance(body, dict) and body.get("mid"):
+        return str(body["mid"])
+    message = payload.get("message")
+    if isinstance(message, dict):
+        if message.get("message_id"):
+            return str(message["message_id"])
+        mbody = message.get("body")
+        if isinstance(mbody, dict) and mbody.get("mid"):
+            return str(mbody["mid"])
+    return ""
+
+
+async def _send_max_image_bytes(text, image_bytes, buttons=None, visual_title=""):
+    timeout = httpx.Timeout(50.0, connect=20.0)
+    async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
+        meta = await client.post(f"{MAX_API}/uploads?type=image", headers={"Authorization": MAX_TOKEN})
+        meta.raise_for_status()
+        upload_url = meta.json().get("url")
+        if not upload_url:
+            raise RuntimeError(f"MAX не вернул upload_url: {meta.text[:300]}")
+        uploaded = await client.post(
+            upload_url,
+            files={"data": ("vera_visual.png", image_bytes, "image/png")},
+        )
+        uploaded.raise_for_status()
+        token = _extract_upload_token(uploaded.json())
+        if not token:
+            raise RuntimeError(f"MAX не вернул token: {uploaded.text[:300]}")
+        keyboard = {"type": "inline_keyboard", "payload": {"buttons": buttons}} if buttons else None
+        image_text = text
+        if visual_title:
+            image_text += f"\n\n🖼️ На изображении: {clean_channel_markup(visual_title)}"
+        attachments = [{"type": "image", "payload": {"token": token}}]
+        if keyboard:
+            attachments.append(keyboard)
+        payload = {"text": image_text[:4000], "attachments": attachments}
+        for attempt, delay in enumerate((0, 2, 4, 7), 1):
+            if delay:
+                await asyncio.sleep(delay)
+            result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload)
+            if _max_response_ok(result):
+                return result
+            if not _attachment_not_ready(result):
+                raise RuntimeError(f"MAX отклонил изображение: {result}")
+    return None
+
+
+async def post_to_channel(
+    text, photo_url=None, buttons=None, deep_link=None,
+    generation_prompt="", cache_key="", prefer_generated=False,
+    visual_title="", show_visual_title=False,
+):
+    """Отправляет визуал: AI-генерация + реальные иконы + чистый текстовый fallback."""
+    base_text = clean_channel_markup(text)
     photo_candidates = photo_url if isinstance(photo_url, (list, tuple)) else ([photo_url] if photo_url else [])
+
+    async def try_generated():
+        data = await generate_channel_image_bytes(generation_prompt, cache_key) if generation_prompt else None
+        if not data:
+            return None
+        try:
+            result = await _send_max_image_bytes(base_text, data, buttons, visual_title="")
+            if result:
+                logging.info("Канал: отправлено реально сгенерированное AI-изображение")
+            return result
+        except Exception as e:
+            logging.error(f"Канал: MAX не принял сгенерированное изображение: {e}")
+            return None
+
+    if prefer_generated:
+        result = await try_generated()
+        if result:
+            return True
 
     for candidate_url in _unique_visual_urls(*photo_candidates):
         try:
-            timeout = httpx.Timeout(45.0, connect=20.0)
-            async with httpx.AsyncClient(timeout=timeout, follow_redirects=True) as client:
-                meta = await client.post(f"{MAX_API}/uploads?type=image", headers={"Authorization": MAX_TOKEN})
-                meta.raise_for_status()
-                upload_url = meta.json().get("url")
-                if not upload_url:
-                    raise RuntimeError(f"MAX не вернул upload_url: {meta.text[:300]}")
-
-                img = await client.get(candidate_url, headers={"User-Agent": "Mozilla/5.0 VeraBot/2.0"})
+            async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
+                img = await client.get(candidate_url, headers={"User-Agent": "Mozilla/5.0 VeraBot/3.0"})
                 img.raise_for_status()
                 if len(img.content) < 1000:
                     raise RuntimeError("Изображение пустое или слишком маленькое")
-                ctype = img.headers.get("content-type", "image/jpeg").split(";")[0]
-                if not ctype.startswith("image/"):
-                    ctype = "image/jpeg"
-                ext = "png" if "png" in ctype else "webp" if "webp" in ctype else "jpg"
-
-                uploaded = await client.post(
-                    upload_url,
-                    files={"data": (f"vera_visual.{ext}", img.content, ctype)},
+                result = await _send_max_image_bytes(
+                    base_text, img.content, buttons,
+                    visual_title=visual_title if show_visual_title else "",
                 )
-                uploaded.raise_for_status()
-                token = _extract_upload_token(uploaded.json())
-                if not token:
-                    raise RuntimeError(f"MAX не вернул token: {uploaded.text[:300]}")
-
-                attachments = [{"type": "image", "payload": {"token": token}}]
-                if keyboard:
-                    attachments.append(keyboard)
-                payload = {"text": text[:4000], "attachments": attachments}
-
-                for attempt, delay in enumerate((0, 2, 4, 7), 1):
-                    if delay:
-                        await asyncio.sleep(delay)
-                    result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload)
-                    if _max_response_ok(result):
-                        logging.info(f"Канал: изображение+CTA отправлены, попытка {attempt}, url={candidate_url}")
-                        return True
-                    if not _attachment_not_ready(result):
-                        raise RuntimeError(f"MAX отклонил изображение: {result}")
+                if result:
+                    logging.info(f"Канал: реальное изображение+CTA отправлены, url={candidate_url}")
+                    return True
         except Exception as e:
-            logging.error(f"Канал: визуал не отправлен ({candidate_url}), пробую резервный: {e}")
+            logging.error(f"Канал: внешний визуал не отправлен ({candidate_url}): {e}")
 
-    payload = {"text": text[:4000]}
+    if not prefer_generated:
+        result = await try_generated()
+        if result:
+            return True
+
+    keyboard = {"type": "inline_keyboard", "payload": {"buttons": buttons}} if buttons else None
+    payload = {"text": base_text[:4000]}
     if keyboard:
         payload["attachments"] = [keyboard]
     result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload)
     if _max_response_ok(result):
-        logging.warning("Канал: публикация отправлена без изображения после исчерпания визуальных fallback")
+        logging.warning("Канал: публикация отправлена без изображения; подпись об изображении удалена")
         return True
-    fallback = (text + f"\n\nОткрыть нужный раздел: {deep_link or MAX_BOT_URL}")[:4000]
+    fallback = (base_text + f"\n\nОткрыть нужный раздел: {deep_link or MAX_BOT_URL}")[:4000]
     result2 = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", {"text": fallback})
     return _max_response_ok(result2)
-
 
 
 CHANNEL_TITLE_EMOJI = {
@@ -2858,8 +3015,7 @@ async def generate_channel_post(prompt, cta_key, rubric, visual_prompt_note="", 
         platform="max",
     )
     footer, buttons, deep_link = get_channel_cta(cta_key)
-    visual_line = f"\n\n🖼️ На изображении: {clean_channel_markup(visual_title)}" if visual_title else ""
-    return text + visual_line + footer, buttons, deep_link, extract_topic(text)
+    return text + footer, buttons, deep_link, extract_topic(text)
 
 
 def build_daily_slots(msk_now: datetime):
@@ -2872,7 +3028,7 @@ def build_daily_slots(msk_now: datetime):
         3: ("храм и традиция", "church", "Расскажи об одной православной традиции или о том, как вести себя в храме. Дай 3 понятных практических шага."),
         4: ("подготовка к Таинству", "practical", "Дай бережную практическую памятку по подготовке к исповеди, Причастию или посещению храма. Уточни, что правила согласуют со священником своего прихода."),
         5: ("житие и пример", "story", "Расскажи краткую проверяемую историю православного святого и чему учит его пример."),
-        6: ("семейное чтение", "film", "Порекомендуй реально существующую православную книгу, фильм или документальный проект для семейного просмотра. Если не уверен в точных данных, не указывай год."),
+        6: ("воскресное размышление", "gospel", "Раскрой одну евангельскую мысль воскресного дня простым языком. Добавь один вопрос для спокойного семейного размышления и один практический шаг на неделю."),
     }
     midday = midday_rotation[weekday]
     return [
@@ -2937,7 +3093,17 @@ async def publish_channel_slot(msk_now: datetime, hour: int, rubric: str, cta_ke
             visual_title=visual.get("title", "") if visual else "",
         )
         photo_urls = visual.get("urls") if visual else None
-        ok = await post_to_channel(text, photo_urls, buttons, deep_link)
+        prefer_generated = bool(visual) and not (hour == 9 or cta_key in {"saint", "life", "story", "showcase_photo"})
+        generation_prompt = build_channel_image_prompt(hour, cta_key, rubric) if visual else ""
+        cache_key = f"max:{date_key}:{hour}:{rubric}:{cta_key}"
+        ok = await post_to_channel(
+            text, photo_urls, buttons, deep_link,
+            generation_prompt=generation_prompt,
+            cache_key=cache_key,
+            prefer_generated=prefer_generated,
+            visual_title=visual.get("title", "") if visual else "",
+            show_visual_title=bool(visual) and not prefer_generated,
+        )
         save_channel_post(
             post_key, date_key, f"{hour:02d}:00", rubric,
             topic, text, "sent" if ok else "failed"
@@ -3019,6 +3185,124 @@ async def publish_latest_missed_slot(msk_now: datetime):
     return await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
 
 
+
+MAX_CHANNEL_INTRO = (
+    "☦️ С ВЕРОЙ — ПРАВОСЛАВНЫЙ ПОМОЩНИК РЯДОМ КАЖДЫЙ ДЕНЬ\n\n"
+    "Этот канал создан для спокойной и понятной духовной жизни без информационного шума.\n\n"
+    "Здесь ежедневно выходят:\n"
+    "🙏 утренние и вечерние молитвенные публикации\n"
+    "👼 святые, праздники и дни памяти\n"
+    "📖 Евангелие и простые объяснения веры\n"
+    "⛪ практические памятки о храме и Таинствах\n"
+    "📚 проверенные книги и фильмы\n\n"
+    "А в православном помощнике можно подобрать молитву, узнать день ангела, подготовиться к исповеди, определить икону по фото и задать личный вопрос о вере.\n\n"
+    "Помощник не заменяет священника. В вопросах Таинств и личного духовного руководства обращайтесь к священнику своего прихода.\n\n"
+    "Подпишитесь на канал и включите уведомления, чтобы не пропускать утренние и вечерние публикации.\n\n"
+    "Выберите, с чего начать 👇"
+)
+
+
+def max_intro_buttons():
+    def dl(source):
+        return f"{MAX_BOT_URL}?start={source}"
+    return [
+        [link_btn("🙏 Молитвы", dl("ch_morning")), link_btn("👼 День ангела", dl("ch_saint"))],
+        [link_btn("📿 Подготовка к исповеди", dl("ch_showcase_confession"))],
+        [link_btn("📸 Узнать икону", dl("ch_photo")), link_btn("❓ Задать вопрос", dl("ch_guidance"))],
+        [link_btn("☦️ Открыть помощника", MAX_BOT_URL)],
+    ]
+
+
+async def publish_and_pin_max_intro():
+    payload = {
+        "text": MAX_CHANNEL_INTRO,
+        "attachments": [{"type": "inline_keyboard", "payload": {"buttons": max_intro_buttons()}}],
+    }
+    result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload)
+    if not _max_response_ok(result):
+        return False, f"MAX не подтвердил публикацию: {result}"
+    message_id = _extract_message_id(result)
+    if not message_id:
+        return True, "Пост опубликован, но ID сообщения не найден — закрепите его вручную."
+    pin_result = await max_request(
+        "PUT", f"chats/{MAX_CHANNEL_ID}/pin",
+        {"message_id": message_id, "notify": False},
+    )
+    if isinstance(pin_result, dict) and pin_result.get("success") is True:
+        return True, "Приветственный пост опубликован и закреплён."
+    return True, f"Пост опубликован, но MAX не подтвердил закрепление: {pin_result}"
+
+
+def save_donation_payment(payment_id, user_id, chat_id, username, first_name, amount, platform):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        """INSERT OR REPLACE INTO donation_payments
+           (payment_id,user_id,chat_id,username,first_name,amount,platform,status,created_at)
+           VALUES (?,?,?,?,?,?,?,'pending',?)""",
+        (str(payment_id), int(user_id), int(chat_id), username or "", first_name or "", int(amount), platform, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _mark_donation_field(payment_id, field, value=1):
+    allowed = {"status", "user_notified", "owner_notified", "sheet_recorded", "paid_at"}
+    if field not in allowed:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(f"UPDATE donation_payments SET {field}=? WHERE payment_id=?", (value, str(payment_id)))
+    conn.commit()
+    conn.close()
+
+
+async def check_donation_payments_loop_max():
+    await asyncio.sleep(25)
+    from yookassa import Configuration, Payment as YPayment
+    Configuration.account_id = "1363324"
+    Configuration.secret_key = "live_-RKE9nsi8wZiM-5f00z78E84OYSi3M0Dj9w_-pE0Mvw"
+    while True:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            rows = conn.execute(
+                """SELECT payment_id,user_id,chat_id,username,first_name,amount,status,
+                          user_notified,owner_notified,sheet_recorded
+                   FROM donation_payments
+                   WHERE status='pending' OR user_notified=0 OR owner_notified=0 OR sheet_recorded=0"""
+            ).fetchall()
+            conn.close()
+            for payment_id,user_id,chat_id,username,first_name,amount,status,user_n,owner_n,sheet_n in rows:
+                try:
+                    if status == "pending":
+                        payment = await asyncio.to_thread(YPayment.find_one, payment_id)
+                        if payment.status != "succeeded":
+                            continue
+                        _mark_donation_field(payment_id, "status", "succeeded")
+                        _mark_donation_field(payment_id, "paid_at", datetime.now().isoformat())
+                    if not user_n:
+                        result = await send_message(
+                            chat_id,
+                            f"🕯️ Пожертвование {amount} рублей прошло успешно.\n\nБлагодарим вас за поддержку проекта «С верой». Да хранит вас Господь!",
+                            main_menu_buttons(),
+                        )
+                        if result and not result.get("error"):
+                            _mark_donation_field(payment_id, "user_notified", 1)
+                    if not owner_n:
+                        result = await send_message(
+                            OWNER_ID,
+                            f"💰 Новое пожертвование в «С верой» MAX\n\nСумма: {amount} ₽\nПользователь: {first_name or '—'}\nUsername: @{username if username else '—'}\nID: {user_id}\nPayment ID: {payment_id}",
+                        )
+                        if result and not result.get("error"):
+                            _mark_donation_field(payment_id, "owner_notified", 1)
+                    if not sheet_n:
+                        await asyncio.to_thread(sheets_add_donation, user_id, username, first_name, amount, "MAX")
+                        _mark_donation_field(payment_id, "sheet_recorded", 1)
+                except Exception as e:
+                    logging.error(f"MAX: ошибка обработки пожертвования {payment_id}: {e}")
+        except Exception as e:
+            logging.error(f"MAX: ошибка цикла пожертвований: {e}")
+        await asyncio.sleep(60)
+
+
 async def channel_scheduler():
     """Автопостинг MAX по МСК с восстановлением после перезапуска."""
     await asyncio.sleep(15)
@@ -3079,6 +3363,7 @@ async def startup():
     asyncio.create_task(asyncio.to_thread(ensure_review_sheet_schema))
     asyncio.create_task(channel_scheduler())
     asyncio.create_task(angel_reminder_loop_max())
+    asyncio.create_task(check_donation_payments_loop_max())
     logging.info("Vera MAX Bot запущен!")
 
 @app.post("/webhook")
@@ -3246,7 +3531,8 @@ async def payment_success():
   <div class="icon">🕯️</div>
   <h1>Пожертвование принято</h1>
   <p>Благодарим вас за вашу щедрость.<br>Да благословит вас Господь!</p>
-  <p>Вы можете вернуться в бот <strong>@Moya_Vera_bot</strong></p>
+  <p>Вы можете вернуться в православного помощника «С верой» в MAX.</p>
+  <p><a href="https://max.ru/id232007136009_1_bot">Открыть помощника</a></p>
   <div class="cross">☦️</div>
 </body>
 </html>"""

@@ -1,5 +1,7 @@
 import random
 import re
+import base64
+import hashlib
 
 MONTHS_RU = {
     1: "января", 2: "февраля", 3: "марта", 4: "апреля",
@@ -60,6 +62,8 @@ BOT_USERNAME      = "Moya_Vera_bot"
 BOT_URL           = f"https://t.me/{BOT_USERNAME}"
 OPENAI_KEY        = _env.get("OPENAI_KEY") or os.environ.get("OPENAI_KEY", "")
 ANTHROPIC_KEY     = _env.get("ANTHROPIC_KEY") or os.environ.get("ANTHROPIC_KEY", "")
+CHANNEL_IMAGE_MODEL = _env.get("CHANNEL_IMAGE_MODEL") or os.environ.get("CHANNEL_IMAGE_MODEL", "gpt-image-1")
+CHANNEL_IMAGE_DIR = "/root/vera_channel_images_tg"
 OWNER_ID          = 549639607
 CREDENTIALS_FILE  = "/root/google_credentials.json"
 SPREADSHEET_ID    = "1PE7CaFuWOe_eygQqIoMAmUdJBtATbIaNfZR4cvarPCA"
@@ -285,16 +289,16 @@ def select_channel_visual(msk_now: datetime, hour: int, cta_key: str, rubric: st
             "prompt_note": f"На изображении будет «{asset['title']}». Объясни, что незнакомую икону можно сфотографировать и отправить помощнику для предварительного определения образа.",
         }
 
-    # Третий визуал дня: 12:00 в пн/ср/чт/сб/вс.
-    if hour == 12 and weekday in {0, 2, 3, 5, 6}:
+    # Третий визуал дня: 12:00 в пн/ср/чт/сб.
+    # В воскресенье 11:00 уже выходит фильм/книга недели, а 12:00 — отдельное
+    # евангельское размышление без дополнительной визуальной ветки.
+    if hour == 12 and weekday in {0, 2, 3, 5}:
         saint_only = weekday in {2, 5}
         asset = _rotating_visual(msk_now, salt=12, saint_only=saint_only)
         if weekday in {2, 5}:
             note = f"На изображении будет «{asset['title']}». Расскажи проверяемый эпизод именно из жизни этого святого и практический урок для современного человека."
         elif weekday == 3:
             note = f"На изображении будет «{asset['title']}». Объясни связанную с этим образом православную традицию, символ или правило поведения в храме."
-        elif weekday == 6:
-            note = f"На изображении будет «{asset['title']}». Порекомендуй реально существующую книгу, фильм или документальный материал, напрямую связанный с этим святым, праздником или темой."
         else:
             note = f"На изображении будет «{asset['title']}». Объясни один церковный термин, символ или практику, которые естественно связаны с этим образом."
         return {
@@ -373,6 +377,76 @@ def add_channel_cta(text: str, cta_key: str) -> str:
     return f"{text.rstrip()}\n\n─────────────────\n{footer}"
 
 
+
+def _channel_visual_cache_path(cache_key: str) -> str:
+    os.makedirs(CHANNEL_IMAGE_DIR, exist_ok=True)
+    digest = hashlib.sha256(cache_key.encode("utf-8")).hexdigest()[:24]
+    return os.path.join(CHANNEL_IMAGE_DIR, f"{digest}.png")
+
+
+def build_channel_image_prompt(hour: int, cta_key: str, rubric: str) -> str:
+    common = (
+        "Premium square editorial image for a calm Russian Orthodox Christian media channel. "
+        "Photorealistic, tasteful, warm natural light, deep detail, no text, no letters, no logo, "
+        "no watermark, no advertising, no human faces, respectful atmosphere. "
+        "Do not imitate a canonical icon and do not depict a specific saint. "
+    )
+    if hour == 7 or cta_key == "morning":
+        return common + "Dawn outside a beautiful Orthodox church, soft golden sunrise, peaceful sky, subtle mist, hopeful beginning of the day."
+    if hour == 20 or cta_key == "evening":
+        return common + "Quiet candlelit Orthodox church interior at evening, open prayer book, warm lampada light, contemplative and peaceful mood."
+    if cta_key in {"gospel", "quote"}:
+        return common + "Open Gospel book on a wooden lectern, candlelight, soft church background, contemplative Sunday atmosphere."
+    if cta_key in {"practical", "guidance", "qa", "showcase_confession"}:
+        return common + "Prayer book, simple wooden cross, candle and notebook on a clean table near a church window, practical and reassuring mood."
+    if cta_key in {"church", "showcase_prayer"}:
+        return common + "Beautiful Orthodox church exterior and a quiet path leading to it, warm daylight, welcoming and trustworthy mood."
+    if cta_key == "film":
+        return common + "A book, subtle film reel and candle on a wooden table, Orthodox church interior softly blurred in the background."
+    return common + f"Atmospheric Orthodox church scene related to the theme: {rubric}."
+
+
+async def generate_channel_image_bytes(prompt: str, cache_key: str):
+    """Реальная AI-генерация изображения с локальным кэшем."""
+    if not OPENAI_KEY or not prompt:
+        return None
+    path = _channel_visual_cache_path(cache_key)
+    try:
+        if os.path.exists(path) and os.path.getsize(path) > 5000:
+            with open(path, "rb") as fh:
+                return fh.read()
+    except Exception:
+        pass
+    models = []
+    for model in (CHANNEL_IMAGE_MODEL, "gpt-image-1-mini"):
+        if model and model not in models:
+            models.append(model)
+    for model in models:
+        try:
+            result = await asyncio.wait_for(
+                openai_client.images.generate(
+                    model=model,
+                    prompt=prompt,
+                    size="1024x1024",
+                    quality="medium",
+                ),
+                timeout=150,
+            )
+            encoded = result.data[0].b64_json if result.data else None
+            if not encoded:
+                raise RuntimeError("API не вернул b64_json")
+            data = base64.b64decode(encoded)
+            if len(data) < 5000:
+                raise RuntimeError("Сгенерированное изображение слишком маленькое")
+            with open(path, "wb") as fh:
+                fh.write(data)
+            logging.info(f"Канал ТГ: AI-изображение создано и сохранено, model={model}")
+            return data
+        except Exception as e:
+            logging.error(f"Канал ТГ: AI-генерация изображения не удалась, model={model}: {e}")
+    return None
+
+
 async def download_channel_image(url: str):
     """Скачивает изображение сам, чтобы Telegram не зависел от загрузки URL своими серверами."""
     try:
@@ -400,30 +474,51 @@ async def send_channel_post(
     msk_now: datetime = None,
     photo_urls=None,
     visual_title: str = "",
+    generation_prompt: str = "",
+    cache_key: str = "",
+    prefer_generated: bool = False,
+    show_visual_title: bool = False,
 ) -> bool:
-    """Отправляет публикацию; для визуала пробует несколько резервных URL."""
-    text = clean_channel_markup(text)
+    """AI-генерация + реальные иконы + чистый текстовый fallback."""
+    base_text = clean_channel_markup(text)
     reply_markup = channel_button(cta_key)
-    body_text = text.rstrip()
-    if visual_title:
-        body_text += f"\n\n🖼️ На изображении: {visual_title}"
-    final_text = add_channel_cta(body_text, cta_key)
+    final_text = add_channel_cta(base_text, cta_key)
+    footer, _label, _source = CHANNEL_CTA.get(cta_key, CHANNEL_CTA["guidance"])
+    suffix = f"\n\n─────────────────\n{footer}"
+
+    def make_caption(extra_title=""):
+        visual_line = f"\n\n🖼️ На изображении: {extra_title}" if extra_title else ""
+        max_body = max(150, 1024 - len(suffix) - len(visual_line) - 5)
+        compact = base_text
+        if len(compact) > max_body:
+            compact = compact[:max_body].rsplit(" ", 1)[0].rstrip(" ,.;:") + "…"
+        return compact + visual_line + suffix
+
+    async def try_generated():
+        data = await generate_channel_image_bytes(generation_prompt, cache_key) if generation_prompt else None
+        if not data:
+            return False
+        try:
+            await bot.send_photo(
+                CHANNEL_ID,
+                photo=BufferedInputFile(data, filename="vera_generated.png"),
+                caption=make_caption(""),
+                reply_markup=reply_markup,
+            )
+            logging.info("Канал ТГ: отправлено реально сгенерированное AI-изображение")
+            return True
+        except Exception as e:
+            logging.error(f"Канал ТГ: сгенерированное изображение не отправлено: {e}")
+            return False
+
+    if with_photo and prefer_generated and await try_generated():
+        return True
 
     if with_photo:
         candidates = photo_urls if isinstance(photo_urls, (list, tuple)) else ([photo_urls] if photo_urls else [])
         if not candidates:
             candidates = [get_channel_icon(msk_now)]
         candidates = _unique_visual_urls(*candidates, get_channel_icon(msk_now), DAILY_ICONS_TG[1])
-
-        footer, _label, _source = CHANNEL_CTA.get(cta_key, CHANNEL_CTA["guidance"])
-        suffix = f"\n\n─────────────────\n{footer}"
-        visual_line = f"\n\n🖼️ На изображении: {visual_title}" if visual_title else ""
-        max_body = max(150, 1024 - len(suffix) - len(visual_line) - 5)
-        compact_body = text.rstrip()
-        if len(compact_body) > max_body:
-            compact_body = compact_body[:max_body].rsplit(" ", 1)[0].rstrip(" ,.;:") + "…"
-        caption = compact_body + visual_line + suffix
-
         for icon_url in candidates:
             try:
                 photo_file = await download_channel_image(icon_url)
@@ -431,25 +526,28 @@ async def send_channel_post(
                     await bot.send_photo(
                         CHANNEL_ID,
                         photo=photo_file,
-                        caption=caption,
+                        caption=make_caption(visual_title if show_visual_title else ""),
                         reply_markup=reply_markup,
                     )
                 else:
                     await bot.send_photo(
                         CHANNEL_ID,
                         photo=icon_url,
-                        caption=caption,
+                        caption=make_caption(visual_title if show_visual_title else ""),
                         reply_markup=reply_markup,
                     )
-                logging.info(f"Канал ТГ: изображение+CTA отправлены, url={icon_url}")
+                logging.info(f"Канал ТГ: реальное изображение+CTA отправлены, url={icon_url}")
                 return True
             except Exception as e:
-                logging.error(f"Канал ТГ: визуал не отправлен ({icon_url}), пробую резервный: {e}")
+                logging.error(f"Канал ТГ: внешний визуал не отправлен ({icon_url}): {e}")
+
+    if with_photo and not prefer_generated and await try_generated():
+        return True
 
     try:
         await bot.send_message(CHANNEL_ID, final_text[:4096], reply_markup=reply_markup)
         if with_photo:
-            logging.warning("Канал ТГ: публикация отправлена без изображения после исчерпания visual fallback")
+            logging.warning("Канал ТГ: публикация отправлена без изображения; подпись об изображении удалена")
         return True
     except Exception as e:
         logging.error(f"Канал ТГ: отправка с кнопкой не удалась: {e}")
@@ -461,7 +559,6 @@ async def send_channel_post(
         except Exception as fallback_error:
             logging.error(f"Канал ТГ: резервная отправка не удалась: {fallback_error}")
             return False
-
 
 logging.basicConfig(level=logging.INFO)
 logging.info(f"OPENAI_KEY loaded: {OPENAI_KEY[:15] if OPENAI_KEY else 'EMPTY'}...")
@@ -545,6 +642,21 @@ def init_db():
         user_id    INTEGER,
         plan       TEXT,
         created_at TEXT
+    )""")
+    c.execute("""CREATE TABLE IF NOT EXISTS donation_payments (
+        payment_id TEXT PRIMARY KEY,
+        user_id INTEGER NOT NULL,
+        chat_id INTEGER NOT NULL,
+        username TEXT DEFAULT '',
+        first_name TEXT DEFAULT '',
+        amount INTEGER NOT NULL,
+        platform TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        user_notified INTEGER NOT NULL DEFAULT 0,
+        owner_notified INTEGER NOT NULL DEFAULT 0,
+        sheet_recorded INTEGER NOT NULL DEFAULT 0,
+        created_at TEXT NOT NULL,
+        paid_at TEXT DEFAULT ''
     )""")
     c.execute("""CREATE TABLE IF NOT EXISTS favorites (
         id      INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3093,7 +3205,7 @@ def build_daily_slots(msk_now: datetime):
         3: ("храм и традиция", "church", "Расскажи об одной православной традиции или о том, как вести себя в храме. Дай 3 понятных практических шага."),
         4: ("подготовка к Таинству", "practical", "Дай бережную практическую памятку по подготовке к исповеди, Причастию или посещению храма. Уточни, что правила согласуют со священником своего прихода."),
         5: ("житие и пример", "story", "Расскажи краткую проверяемую историю православного святого и чему учит его пример."),
-        6: ("семейное чтение", "film", "Порекомендуй реально существующую православную книгу, фильм или документальный проект для семейного просмотра. Если не уверен в точных данных, не указывай год."),
+        6: ("воскресное размышление", "gospel", "Раскрой одну евангельскую мысль воскресного дня простым языком. Добавь один вопрос для спокойного семейного размышления и один практический шаг на неделю."),
     }
     midday = midday_rotation[weekday]
     return [
@@ -3155,6 +3267,7 @@ async def publish_channel_slot(msk_now, hour, rubric, cta_key, prompt):
             prompt, cta_key, rubric,
             visual_prompt_note=visual.get("prompt_note", "") if visual else "",
         )
+        prefer_generated = bool(visual) and not (hour == 9 or cta_key in {"saint", "life", "story", "showcase_photo"})
         ok = await send_channel_post(
             post_text,
             cta_key,
@@ -3162,6 +3275,10 @@ async def publish_channel_slot(msk_now, hour, rubric, cta_key, prompt):
             msk_now=msk_now,
             photo_urls=visual.get("urls") if visual else None,
             visual_title=visual.get("title", "") if visual else "",
+            generation_prompt=build_channel_image_prompt(hour, cta_key, rubric) if visual else "",
+            cache_key=f"tg:{date_key}:{hour}:{rubric}:{cta_key}",
+            prefer_generated=prefer_generated,
+            show_visual_title=bool(visual) and not prefer_generated,
         )
         save_channel_post(
             post_key, date_key, f"{hour:02d}:00", rubric, topic, post_text,
@@ -3467,6 +3584,111 @@ async def cmd_menu(message: Message):
     await message.answer("☦️ Главное меню:", reply_markup=main_menu())
 
 
+TELEGRAM_CHANNEL_INTRO = (
+    "☦️ С ВЕРОЙ — ПРАВОСЛАВНЫЙ ПОМОЩНИК РЯДОМ КАЖДЫЙ ДЕНЬ\n\n"
+    "Этот канал создан для спокойной и понятной духовной жизни без информационного шума.\n\n"
+    "Здесь ежедневно выходят:\n"
+    "🙏 утренние и вечерние молитвенные публикации\n"
+    "👼 святые, праздники и дни памяти\n"
+    "📖 Евангелие и простые объяснения веры\n"
+    "⛪ практические памятки о храме и Таинствах\n"
+    "📚 проверенные книги и фильмы\n\n"
+    "А в православном помощнике можно подобрать молитву, узнать день ангела, подготовиться к исповеди, определить икону по фото и задать личный вопрос о вере.\n\n"
+    "Помощник не заменяет священника. В вопросах Таинств и личного духовного руководства обращайтесь к священнику своего прихода.\n\n"
+    "Подпишитесь на канал и включите уведомления, чтобы не пропускать утренние и вечерние публикации.\n\n"
+    "Выберите, с чего начать 👇"
+)
+
+
+def telegram_intro_keyboard():
+    def dl(source):
+        return f"{BOT_URL}?start={source}"
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🙏 Молитвы", url=dl("ch_morning")), InlineKeyboardButton(text="👼 День ангела", url=dl("ch_saint"))],
+        [InlineKeyboardButton(text="📿 Подготовка к исповеди", url=dl("ch_showcase_confession"))],
+        [InlineKeyboardButton(text="📸 Узнать икону", url=dl("ch_photo")), InlineKeyboardButton(text="❓ Задать вопрос", url=dl("ch_guidance"))],
+        [InlineKeyboardButton(text="☦️ Открыть помощника", url=BOT_URL)],
+    ])
+
+
+def save_donation_payment(payment_id, user_id, chat_id, username, first_name, amount, platform):
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(
+        """INSERT OR REPLACE INTO donation_payments
+           (payment_id,user_id,chat_id,username,first_name,amount,platform,status,created_at)
+           VALUES (?,?,?,?,?,?,?,'pending',?)""",
+        (str(payment_id), int(user_id), int(chat_id), username or "", first_name or "", int(amount), platform, datetime.now().isoformat()),
+    )
+    conn.commit()
+    conn.close()
+
+
+def _mark_donation_field(payment_id, field, value=1):
+    allowed = {"status", "user_notified", "owner_notified", "sheet_recorded", "paid_at"}
+    if field not in allowed:
+        return
+    conn = sqlite3.connect(DB_PATH)
+    conn.execute(f"UPDATE donation_payments SET {field}=? WHERE payment_id=?", (value, str(payment_id)))
+    conn.commit()
+    conn.close()
+
+
+async def check_donation_payments_loop_tg():
+    await asyncio.sleep(25)
+    while True:
+        try:
+            conn = sqlite3.connect(DB_PATH)
+            rows = conn.execute(
+                """SELECT payment_id,user_id,chat_id,username,first_name,amount,status,
+                          user_notified,owner_notified,sheet_recorded
+                   FROM donation_payments
+                   WHERE status='pending' OR user_notified=0 OR owner_notified=0 OR sheet_recorded=0"""
+            ).fetchall()
+            conn.close()
+            for payment_id,user_id,chat_id,username,first_name,amount,status,user_n,owner_n,sheet_n in rows:
+                try:
+                    if status == "pending":
+                        payment = await asyncio.to_thread(Payment.find_one, payment_id)
+                        if payment.status != "succeeded":
+                            continue
+                        _mark_donation_field(payment_id, "status", "succeeded")
+                        _mark_donation_field(payment_id, "paid_at", datetime.now().isoformat())
+                    if not user_n:
+                        await bot.send_message(
+                            chat_id,
+                            f"🕯️ Пожертвование {amount} рублей прошло успешно.\n\nБлагодарим вас за поддержку проекта «С верой». Да хранит вас Господь!",
+                            reply_markup=main_menu(),
+                        )
+                        _mark_donation_field(payment_id, "user_notified", 1)
+                    if not owner_n:
+                        await bot.send_message(
+                            OWNER_ID,
+                            f"💰 Новое пожертвование в «С верой» Telegram\n\nСумма: {amount} ₽\nПользователь: {first_name or '—'}\nUsername: @{username if username else '—'}\nID: {user_id}\nPayment ID: {payment_id}",
+                        )
+                        _mark_donation_field(payment_id, "owner_notified", 1)
+                    if not sheet_n:
+                        await asyncio.to_thread(add_donation_to_sheet, user_id, username, first_name, amount)
+                        _mark_donation_field(payment_id, "sheet_recorded", 1)
+                except Exception as e:
+                    logging.error(f"ТГ: ошибка обработки пожертвования {payment_id}: {e}")
+        except Exception as e:
+            logging.error(f"ТГ: ошибка цикла пожертвований: {e}")
+        await asyncio.sleep(60)
+
+
+@dp.message(Command("publish_channel_intro"))
+async def cmd_publish_channel_intro(message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    try:
+        posted = await bot.send_message(CHANNEL_ID, TELEGRAM_CHANNEL_INTRO, reply_markup=telegram_intro_keyboard())
+        await bot.pin_chat_message(CHANNEL_ID, posted.message_id, disable_notification=True)
+        await message.answer("✅ Приветственный пост опубликован и закреплён в Telegram-канале.")
+    except Exception as e:
+        logging.exception(f"Не удалось опубликовать/закрепить приветственный пост: {e}")
+        await message.answer(f"⚠️ Не удалось закрепить пост: {str(e)[:500]}")
+
+
 @dp.message(Command("channel_status"))
 async def cmd_channel_status(message: Message):
     """Диагностика канала только для владельца."""
@@ -3511,12 +3733,16 @@ async def cmd_channel_image_test(message: Message):
     msk_now = datetime.utcnow() + timedelta(hours=3)
     visual = select_channel_visual(msk_now, 20, "evening", "тест изображения")
     ok = await send_channel_post(
-        "🖼️ Проверка визуальной публикации\n\nЕсли вы видите изображение, подпись и кнопку, визуальная система канала работает корректно.",
+        "🖼️ Проверка визуальной публикации\n\nЕсли вы видите изображение и кнопку, реальная AI-генерация и отправка в канал работают корректно.",
         "evening",
         with_photo=True,
         msk_now=msk_now,
         photo_urls=visual["urls"],
         visual_title=visual["title"],
+        generation_prompt=build_channel_image_prompt(20, "evening", "тест изображения"),
+        cache_key=f"tg:test:{msk_now:%Y-%m-%d}",
+        prefer_generated=True,
+        show_visual_title=False,
     )
     await message.answer(
         "✅ Тестовый пост с изображением отправлен в Telegram-канал"
@@ -5262,6 +5488,11 @@ async def handle_text(message: Message):
                 },
             }, str(uuid.uuid4()))
             set_step(user_id, "idle")
+            save_donation_payment(
+                payment.id, user_id, message.chat.id,
+                message.from_user.username or "", message.from_user.first_name or "",
+                amount, "Telegram"
+            )
             await message.answer(
                 f"🕯️ *Пожертвование {amount} рублей*\n\n"
                 f"Нажмите кнопку для перехода к оплате 👇",
@@ -5335,6 +5566,7 @@ async def main():
     asyncio.create_task(channel_post_loop())
     asyncio.create_task(angel_reminder_loop())
     asyncio.create_task(check_payments_loop())
+    asyncio.create_task(check_donation_payments_loop_tg())
     asyncio.create_task(donation_monthly_loop())
     await dp.start_polling(bot)
 
