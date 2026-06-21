@@ -47,12 +47,29 @@ OPENAI_KEY    = _env.get("OPENAI_KEY") or os.environ.get("OPENAI_KEY", "")
 ANTHROPIC_KEY = _env.get("ANTHROPIC_KEY") or os.environ.get("ANTHROPIC_KEY", "")
 CHANNEL_IMAGE_MODEL = _env.get("CHANNEL_IMAGE_MODEL") or os.environ.get("CHANNEL_IMAGE_MODEL", "gpt-image-1")
 CHANNEL_IMAGE_DIR = "/root/vera_channel_images_shared"
-OWNER_ID      = 549639607
+
+
+def _config_int(name: str, default: int) -> int:
+    """Читает числовой параметр сначала из .env_vera, затем из окружения."""
+    raw = _env.get(name) or os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return int(default)
+    try:
+        return int(str(raw).strip())
+    except (TypeError, ValueError):
+        logging.warning(f"Некорректное значение {name}={raw!r}; используется {default}")
+        return int(default)
+
+
+# Реальный MAX ID владельца лучше хранить в /root/.env_vera:
+# MAX_OWNER_ID=123456789
+OWNER_ID      = _config_int("MAX_OWNER_ID", 549639607)
 DB_PATH       = "/root/vera_max.db"
 WEBHOOK_URL   = "https://sveroy.ru/webhook"
 
 logging.info(f"MAX_TOKEN: {MAX_TOKEN[:15] if MAX_TOKEN else 'EMPTY'}...")
 logging.info(f"OPENAI_KEY: {OPENAI_KEY[:15] if OPENAI_KEY else 'EMPTY'}...")
+logging.info(f"MAX_OWNER_ID: {OWNER_ID}")
 
 CREDENTIALS_FILE = "/root/google_credentials.json"
 SPREADSHEET_ID   = "1PE7CaFuWOe_eygQqIoMAmUdJBtATbIaNfZR4cvarPCA"
@@ -2501,12 +2518,29 @@ async def handle_text(chat_id, user_id, text, first_name=""):
     user = get_user(user_id)
     step = user.get("step", "idle")
 
+    owner_command = text.strip().lower()
+
+    # Команда доступна всем: помогает один раз узнать реальный MAX user_id.
+    # Для служебных команд используется именно user_id, а не chat_id.
+    if owner_command in {"/myid", "мой id", "мой айди"}:
+        owner_mark = "да" if int(user_id) == int(OWNER_ID) else "нет"
+        await send_message(
+            chat_id,
+            "🪪 Ваши идентификаторы MAX\n\n"
+            f"User ID: {user_id}\n"
+            f"Chat ID: {chat_id}\n"
+            f"Сейчас распознан как владелец: {owner_mark}\n\n"
+            "Для настройки владельца добавьте в /root/.env_vera строку:\n"
+            f"MAX_OWNER_ID={user_id}\n\n"
+            "После изменения перезапустите службу MAX-бота."
+        )
+        return
+
     if text.strip() in ("/start", "start"):
         await handle_start(chat_id, user_id, first_name, "")
         return
 
     # Диагностика MAX-канала доступна только владельцу.
-    owner_command = text.strip().lower()
     if int(user_id) == int(OWNER_ID) and owner_command in {"/funnel_report", "воронка"}:
         await send_message(chat_id, funnel_report_text("MAX", 7))
         return
