@@ -113,11 +113,205 @@ FEAST_ICONS_TG = {
     "08.10": "https://upload.wikimedia.org/wikipedia/commons/thumb/d/d6/Sergius_icon.jpg/800px-Sergius_icon.jpg",
 }
 
+# Те же праздничные изображения, что и в MAX-версии.
+FEAST_ICONS_TG.update({
+    "27.09": "https://upload.wikimedia.org/wikipedia/commons/thumb/7/74/Exaltation_of_the_Cross_icon.jpg/800px-Exaltation_of_the_Cross_icon.jpg",
+    "04.12": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1e/Entry_into_the_Temple.jpg/800px-Entry_into_the_Temple.jpg",
+    "21.09": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/3e/Nativity_of_Mary_icon.jpg/800px-Nativity_of_Mary_icon.jpg",
+    "22.08": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Our_Lady_of_Kazan_icon.jpg/800px-Our_Lady_of_Kazan_icon.jpg",
+    "04.11": "https://upload.wikimedia.org/wikipedia/commons/thumb/3/30/Our_Lady_of_Kazan_icon.jpg/800px-Our_Lady_of_Kazan_icon.jpg",
+    "06.03": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f2/Iverskaya_icon.jpg/800px-Iverskaya_icon.jpg",
+    "01.08": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6e/Seraphim_of_Sarov_icon.jpg/800px-Seraphim_of_Sarov_icon.jpg",
+    "15.01": "https://upload.wikimedia.org/wikipedia/commons/thumb/6/6e/Seraphim_of_Sarov_icon.jpg/800px-Seraphim_of_Sarov_icon.jpg",
+    "02.08": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/52/Elijah_icon.jpg/800px-Elijah_icon.jpg",
+    "12.07": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Peter_and_Paul_icon.jpg/800px-Peter_and_Paul_icon.jpg",
+    "13.07": "https://upload.wikimedia.org/wikipedia/commons/thumb/1/1b/Peter_and_Paul_icon.jpg/800px-Peter_and_Paul_icon.jpg",
+    "11.09": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c7/John_the_Baptist_icon.jpg/800px-John_the_Baptist_icon.jpg",
+    "07.07": "https://upload.wikimedia.org/wikipedia/commons/thumb/c/c7/John_the_Baptist_icon.jpg/800px-John_the_Baptist_icon.jpg",
+    "17.12": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a9/Barbara_icon.jpg/800px-Barbara_icon.jpg",
+    "31.10": "https://upload.wikimedia.org/wikipedia/commons/thumb/5/59/Luke_icon.jpg/800px-Luke_icon.jpg",
+    "21.11": "https://upload.wikimedia.org/wikipedia/commons/thumb/b/b3/Michael_icon.jpg/800px-Michael_icon.jpg",
+    "08.11": "https://upload.wikimedia.org/wikipedia/commons/thumb/a/a0/Demetrius_of_Thessaloniki_icon.jpg/800px-Demetrius_of_Thessaloniki_icon.jpg",
+    "30.09": "https://upload.wikimedia.org/wikipedia/commons/thumb/f/f4/Faith_Hope_Love_icon.jpg/800px-Faith_Hope_Love_icon.jpg",
+})
+
 def get_channel_icon(msk_now: datetime = None) -> str:
     """Возвращает икону по московской дате — праздничную или по числу месяца."""
     msk_now = msk_now or (datetime.utcnow() + timedelta(hours=3))
     today_key = msk_now.strftime("%d.%m")
     return FEAST_ICONS_TG.get(today_key) or DAILY_ICONS_TG.get(msk_now.day, DAILY_ICONS_TG[1])
+
+
+# Единая визуальная редакционная система канала.
+# Изображение всегда связано с темой публикации; подпись честно называет образ.
+CHANNEL_VISUAL_ASSETS = [
+    {"key": "kazan", "title": "Казанская икона Божией Матери", "kind": "theotokos", "url": DAILY_ICONS_TG[1]},
+    {"key": "nicholas", "title": "святитель Николай Чудотворец", "kind": "saint", "url": DAILY_ICONS_TG[2]},
+    {"key": "michael", "title": "Архангел Михаил", "kind": "saint", "url": DAILY_ICONS_TG[3]},
+    {"key": "seraphim", "title": "преподобный Серафим Саровский", "kind": "saint", "url": DAILY_ICONS_TG[4]},
+    {"key": "john_baptist", "title": "Иоанн Предтеча", "kind": "saint", "url": DAILY_ICONS_TG[5]},
+    {"key": "sergius", "title": "преподобный Сергий Радонежский", "kind": "saint", "url": DAILY_ICONS_TG[6]},
+    {"key": "george", "title": "великомученик Георгий Победоносец", "kind": "saint", "url": DAILY_ICONS_TG[7]},
+    {"key": "matrona", "title": "блаженная Матрона Московская", "kind": "saint", "url": DAILY_ICONS_TG[8]},
+    {"key": "peter_paul", "title": "апостолы Пётр и Павел", "kind": "saint", "url": DAILY_ICONS_TG[9]},
+    {"key": "elijah", "title": "пророк Илия", "kind": "saint", "url": DAILY_ICONS_TG[10]},
+    {"key": "demetrius", "title": "великомученик Димитрий Солунский", "kind": "saint", "url": DAILY_ICONS_TG[11]},
+    {"key": "nativity", "title": "Рождество Христово", "kind": "feast", "url": DAILY_ICONS_TG[12]},
+    {"key": "iverskaya", "title": "Иверская икона Божией Матери", "kind": "theotokos", "url": DAILY_ICONS_TG[13]},
+    {"key": "cross", "title": "Воздвижение Креста Господня", "kind": "feast", "url": DAILY_ICONS_TG[14]},
+    {"key": "annunciation", "title": "Благовещение Пресвятой Богородицы", "kind": "feast", "url": DAILY_ICONS_TG[15]},
+    {"key": "dormition", "title": "Успение Пресвятой Богородицы", "kind": "feast", "url": DAILY_ICONS_TG[16]},
+    {"key": "transfiguration", "title": "Преображение Господне", "kind": "feast", "url": DAILY_ICONS_TG[17]},
+    {"key": "theophany", "title": "Крещение Господне", "kind": "feast", "url": DAILY_ICONS_TG[18]},
+    {"key": "pokrov", "title": "Покров Пресвятой Богородицы", "kind": "feast", "url": DAILY_ICONS_TG[19]},
+    {"key": "barbara", "title": "великомученица Варвара", "kind": "saint", "url": DAILY_ICONS_TG[21]},
+    {"key": "luke", "title": "апостол и евангелист Лука", "kind": "saint", "url": DAILY_ICONS_TG[22]},
+    {"key": "nativity_mary", "title": "Рождество Пресвятой Богородицы", "kind": "feast", "url": DAILY_ICONS_TG[23]},
+    {"key": "meeting", "title": "Сретение Господне", "kind": "feast", "url": DAILY_ICONS_TG[24]},
+    {"key": "faith_hope_love", "title": "мученицы Вера, Надежда, Любовь и София", "kind": "saint", "url": DAILY_ICONS_TG[25]},
+]
+
+FEAST_VISUAL_TITLES = {
+    "07.01": "Рождество Христово", "19.01": "Крещение Господне",
+    "15.02": "Сретение Господне", "07.04": "Благовещение Пресвятой Богородицы",
+    "19.08": "Преображение Господне", "27.09": "Воздвижение Креста Господня",
+    "28.08": "Успение Пресвятой Богородицы", "21.09": "Рождество Пресвятой Богородицы",
+    "14.10": "Покров Пресвятой Богородицы", "04.11": "Казанская икона Божией Матери",
+    "19.12": "святитель Николай Чудотворец", "22.05": "святитель Николай Чудотворец",
+    "06.05": "великомученик Георгий Победоносец", "02.05": "блаженная Матрона Московская",
+    "08.10": "преподобный Сергий Радонежский", "02.08": "пророк Илия",
+    "12.07": "апостолы Пётр и Павел", "11.09": "Иоанн Предтеча",
+    "07.07": "Иоанн Предтеча", "17.12": "великомученица Варвара",
+    "31.10": "апостол и евангелист Лука", "21.11": "Архангел Михаил",
+    "08.11": "великомученик Димитрий Солунский", "30.09": "мученицы Вера, Надежда, Любовь и София",
+}
+
+SAINT_VISUAL_KEYWORDS = {
+    "никол": "nicholas", "михаил": "michael", "серафим": "seraphim",
+    "иоанн предтеч": "john_baptist", "серги": "sergius", "георги": "george",
+    "матрон": "matrona", "петр": "peter_paul", "пётр": "peter_paul", "павел": "peter_paul",
+    "илия": "elijah", "димитри": "demetrius", "варвар": "barbara",
+    "лук": "luke", "вера": "faith_hope_love", "надежд": "faith_hope_love",
+    "любов": "faith_hope_love", "софи": "faith_hope_love",
+}
+
+
+def _visual_by_key(key: str):
+    return next((item for item in CHANNEL_VISUAL_ASSETS if item["key"] == key), None)
+
+
+def _rotating_visual(msk_now: datetime, salt: int = 0, saint_only: bool = False):
+    pool = [x for x in CHANNEL_VISUAL_ASSETS if (not saint_only or x["kind"] == "saint")]
+    return pool[(msk_now.toordinal() + salt) % len(pool)]
+
+
+def _saints_for_visual_date(msk_now: datetime):
+    date_key = msk_now.strftime("%d.%m")
+    result = []
+    for name, days in SAINTS_BY_NAME.items():
+        for day_str, description in days:
+            if day_str == date_key:
+                result.append((name, description))
+    return result
+
+
+def _unique_visual_urls(*urls):
+    result = []
+    for url in urls:
+        if url and url not in result:
+            result.append(url)
+    return result
+
+
+def select_channel_visual(msk_now: datetime, hour: int, cta_key: str, rubric: str):
+    """Возвращает тематический визуал или None согласно утверждённой сетке.
+
+    Каждый день: 09:00 и 20:00 с изображением.
+    Третий визуальный слот: 07:00 во вторник/пятницу или 12:00 в остальные дни.
+    Субботнее житие и демонстрация распознавания иконы также всегда с изображением.
+    """
+    date_key = msk_now.strftime("%d.%m")
+    weekday = msk_now.weekday()
+
+    if hour == 9 or cta_key == "saint":
+        if date_key in FEAST_ICONS_TG:
+            title = FEAST_VISUAL_TITLES.get(date_key, get_todays_feast() or "праздничная икона")
+            primary = FEAST_ICONS_TG[date_key]
+            fallback = _rotating_visual(msk_now, salt=9)
+            return {
+                "title": title,
+                "urls": _unique_visual_urls(primary, fallback["url"], DAILY_ICONS_TG[1]),
+                "prompt_note": f"На изображении будет «{title}». Текст должен быть прямо связан с этим праздником или святым и не содержать непроверенных фактов.",
+            }
+        saints = _saints_for_visual_date(msk_now)
+        searchable = " ".join(f"{n} {d}" for n, d in saints).lower()
+        for keyword, key in SAINT_VISUAL_KEYWORDS.items():
+            if keyword in searchable:
+                asset = _visual_by_key(key)
+                return {
+                    "title": asset["title"],
+                    "urls": _unique_visual_urls(asset["url"], get_channel_icon(msk_now), DAILY_ICONS_TG[1]),
+                    "prompt_note": f"На изображении будет «{asset['title']}». Сделай публикацию непосредственно об этом святом и сегодняшней памяти, используя только проверяемые сведения.",
+                }
+        asset = _rotating_visual(msk_now, salt=9, saint_only=True)
+        return {
+            "title": f"{asset['title']} — образ для молитвенного размышления",
+            "urls": _unique_visual_urls(asset["url"], get_channel_icon(msk_now), DAILY_ICONS_TG[1]),
+            "prompt_note": f"Календарная часть остаётся главной. На изображении будет «{asset['title']}» как отдельный образ для молитвенного размышления. Не называй его святым сегодняшнего дня без подтверждения.",
+        }
+
+    if hour == 20 or cta_key == "evening":
+        asset = _rotating_visual(msk_now, salt=20)
+        return {
+            "title": asset["title"],
+            "urls": _unique_visual_urls(asset["url"], DAILY_ICONS_TG[13], DAILY_ICONS_TG[1]),
+            "prompt_note": f"На изображении будет «{asset['title']}». Свяжи вечернюю молитву с благодарностью, надеждой и миром в сердце; не приписывай образу неподтверждённые свойства.",
+        }
+
+    if cta_key == "life":
+        asset = _rotating_visual(msk_now, salt=11, saint_only=True)
+        return {
+            "title": asset["title"],
+            "urls": _unique_visual_urls(asset["url"], DAILY_ICONS_TG[2], DAILY_ICONS_TG[4]),
+            "prompt_note": f"На изображении будет «{asset['title']}». Расскажи проверяемое житие именно этого святого, его подвиг и один практический урок.",
+        }
+
+    if cta_key == "showcase_photo":
+        asset = _rotating_visual(msk_now, salt=17)
+        return {
+            "title": asset["title"],
+            "urls": _unique_visual_urls(asset["url"], DAILY_ICONS_TG[1]),
+            "prompt_note": f"На изображении будет «{asset['title']}». Объясни, что незнакомую икону можно сфотографировать и отправить помощнику для предварительного определения образа.",
+        }
+
+    # Третий визуал дня: 12:00 в пн/ср/чт/сб/вс.
+    if hour == 12 and weekday in {0, 2, 3, 5, 6}:
+        saint_only = weekday in {2, 5}
+        asset = _rotating_visual(msk_now, salt=12, saint_only=saint_only)
+        if weekday in {2, 5}:
+            note = f"На изображении будет «{asset['title']}». Расскажи проверяемый эпизод именно из жизни этого святого и практический урок для современного человека."
+        elif weekday == 3:
+            note = f"На изображении будет «{asset['title']}». Объясни связанную с этим образом православную традицию, символ или правило поведения в храме."
+        elif weekday == 6:
+            note = f"На изображении будет «{asset['title']}». Порекомендуй реально существующую книгу, фильм или документальный материал, напрямую связанный с этим святым, праздником или темой."
+        else:
+            note = f"На изображении будет «{asset['title']}». Объясни один церковный термин, символ или практику, которые естественно связаны с этим образом."
+        return {
+            "title": asset["title"],
+            "urls": _unique_visual_urls(asset["url"], DAILY_ICONS_TG[1]),
+            "prompt_note": note,
+        }
+
+    # Во вторник и пятницу третий визуальный слот переносится на утро.
+    if hour == 7 and weekday in {1, 4}:
+        asset = _rotating_visual(msk_now, salt=7)
+        return {
+            "title": asset["title"],
+            "urls": _unique_visual_urls(asset["url"], DAILY_ICONS_TG[13], DAILY_ICONS_TG[1]),
+            "prompt_note": f"На изображении будет «{asset['title']}». Свяжи утренний текст с надеждой, благодарностью и началом дня, не выдумывая фактов об образе.",
+        }
+
+    return None
 
 
 # CTA канала. Третий элемент — уникальный источник для аналитики воронки.
@@ -198,44 +392,62 @@ async def download_channel_image(url: str):
         return None
 
 
-async def send_channel_post(text: str, cta_key: str, with_photo: bool = False, msk_now: datetime = None) -> bool:
-    """Отправляет публикацию с тематической кнопкой и надёжным fallback."""
+async def send_channel_post(
+    text: str,
+    cta_key: str,
+    with_photo: bool = False,
+    msk_now: datetime = None,
+    photo_urls=None,
+    visual_title: str = "",
+) -> bool:
+    """Отправляет публикацию; для визуала пробует несколько резервных URL."""
     reply_markup = channel_button(cta_key)
-    final_text = add_channel_cta(text, cta_key)
+    body_text = text.rstrip()
+    if visual_title:
+        body_text += f"\n\n🖼️ На изображении: {visual_title}"
+    final_text = add_channel_cta(body_text, cta_key)
 
     if with_photo:
-        icon_url = get_channel_icon(msk_now)
-        # Telegram ограничивает подпись к фото 1024 символами. CTA сохраняем всегда.
+        candidates = photo_urls if isinstance(photo_urls, (list, tuple)) else ([photo_urls] if photo_urls else [])
+        if not candidates:
+            candidates = [get_channel_icon(msk_now)]
+        candidates = _unique_visual_urls(*candidates, get_channel_icon(msk_now), DAILY_ICONS_TG[1])
+
         footer, _label, _source = CHANNEL_CTA.get(cta_key, CHANNEL_CTA["guidance"])
         suffix = f"\n\n─────────────────\n{footer}"
-        max_body = max(150, 1024 - len(suffix) - 5)
-        body = text.rstrip()
-        if len(body) > max_body:
-            body = body[:max_body].rsplit(" ", 1)[0].rstrip(" ,.;:") + "…"
-        caption = body + suffix
-        try:
-            photo_file = await download_channel_image(icon_url)
-            if photo_file is not None:
-                await bot.send_photo(
-                    CHANNEL_ID,
-                    photo=photo_file,
-                    caption=caption,
-                    reply_markup=reply_markup,
-                )
-            else:
-                # Последний шанс: Telegram сам попробует скачать URL.
-                await bot.send_photo(
-                    CHANNEL_ID,
-                    photo=icon_url,
-                    caption=caption,
-                    reply_markup=reply_markup,
-                )
-            return True
-        except Exception as e:
-            logging.error(f"Канал ТГ: фото не отправлено, пробую текстом: {e}")
+        visual_line = f"\n\n🖼️ На изображении: {visual_title}" if visual_title else ""
+        max_body = max(150, 1024 - len(suffix) - len(visual_line) - 5)
+        compact_body = text.rstrip()
+        if len(compact_body) > max_body:
+            compact_body = compact_body[:max_body].rsplit(" ", 1)[0].rstrip(" ,.;:") + "…"
+        caption = compact_body + visual_line + suffix
+
+        for icon_url in candidates:
+            try:
+                photo_file = await download_channel_image(icon_url)
+                if photo_file is not None:
+                    await bot.send_photo(
+                        CHANNEL_ID,
+                        photo=photo_file,
+                        caption=caption,
+                        reply_markup=reply_markup,
+                    )
+                else:
+                    await bot.send_photo(
+                        CHANNEL_ID,
+                        photo=icon_url,
+                        caption=caption,
+                        reply_markup=reply_markup,
+                    )
+                logging.info(f"Канал ТГ: изображение+CTA отправлены, url={icon_url}")
+                return True
+            except Exception as e:
+                logging.error(f"Канал ТГ: визуал не отправлен ({icon_url}), пробую резервный: {e}")
 
     try:
         await bot.send_message(CHANNEL_ID, final_text[:4096], reply_markup=reply_markup)
+        if with_photo:
+            logging.warning("Канал ТГ: публикация отправлена без изображения после исчерпания visual fallback")
         return True
     except Exception as e:
         logging.error(f"Канал ТГ: отправка с кнопкой не удалась: {e}")
@@ -247,6 +459,7 @@ async def send_channel_post(text: str, cta_key: str, with_photo: bool = False, m
         except Exception as fallback_error:
             logging.error(f"Канал ТГ: резервная отправка не удалась: {fallback_error}")
             return False
+
 
 logging.basicConfig(level=logging.INFO)
 logging.info(f"OPENAI_KEY loaded: {OPENAI_KEY[:15] if OPENAI_KEY else 'EMPTY'}...")
@@ -280,6 +493,9 @@ except Exception as _e:
     logging.error(f"Не удалось задать таймаут сессии, использую стандартный: {_e}")
     bot = Bot(token=BOT_TOKEN)
 dp  = Dispatcher(storage=MemoryStorage())
+
+# Защита от одновременной публикации планировщиком и восстановлением после перезапуска.
+CHANNEL_PUBLISH_LOCK = asyncio.Lock()
 
 # ========== БАЗА ДАННЫХ ==========
 DB_PATH = "/root/vera.db"
@@ -2579,6 +2795,37 @@ def channel_post_exists(post_key: str) -> bool:
     return bool(row and row[0] == "sent")
 
 
+def channel_posts_today(msk_now: datetime = None):
+    """Возвращает успешно опубликованные сегодня записи журнала канала."""
+    msk_now = msk_now or (datetime.utcnow() + timedelta(hours=3))
+    date_key = msk_now.strftime("%Y-%m-%d")
+    try:
+        conn = sqlite3.connect(DB_PATH)
+        rows = conn.execute(
+            """SELECT slot, rubric, topic, created_at
+               FROM channel_posts
+               WHERE post_date=? AND status='sent'
+               ORDER BY slot, created_at""",
+            (date_key,),
+        ).fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        logging.error(f"Канал ТГ: не удалось прочитать журнал за сегодня: {e}")
+        return []
+
+
+def all_channel_slots(msk_now: datetime):
+    """Все запланированные на текущий день публикации, отсортированные по времени."""
+    return sorted(build_daily_slots(msk_now) + special_slots(msk_now), key=lambda x: x[0])
+
+
+def latest_due_channel_slot(msk_now: datetime):
+    """Последний уже наступивший слот дня. Используется для безопасного catch-up после рестарта."""
+    due = [slot for slot in all_channel_slots(msk_now) if slot[0] <= msk_now.hour]
+    return due[-1] if due else None
+
+
 def save_channel_post(post_key, post_date, slot, rubric, topic, content, status):
     try:
         conn = sqlite3.connect(DB_PATH)
@@ -2629,11 +2876,12 @@ FALLBACK_POSTS = {
 }
 
 
-async def generate_channel_post(prompt: str, cta_key: str, rubric: str):
+async def generate_channel_post(prompt: str, cta_key: str, rubric: str, visual_prompt_note: str = ""):
     history = recent_channel_topics(35)
     history_note = f"\n\nНе повторяй эти недавние темы:\n{history}" if history else ""
+    visual_note = f"\n\n{visual_prompt_note}" if visual_prompt_note else ""
     full_prompt = (
-        prompt + history_note +
+        prompt + visual_note + history_note +
         "\nВ первой строке дай понятный заголовок. Не повторяй одинаковые вступления. "
         "Общий объём — до 750 символов, чтобы публикация помещалась под изображением."
     )
@@ -2717,37 +2965,107 @@ def special_slots(msk_now: datetime):
 
 
 async def publish_channel_slot(msk_now, hour, rubric, cta_key, prompt):
-    date_key = msk_now.strftime("%Y-%m-%d")
-    post_key = f"{date_key}_{hour:02d}_{rubric}"
-    if channel_post_exists(post_key):
-        return False
-    if prompt == "__DYNAMIC_SAINT__":
-        prompt = dynamic_saint_prompt(msk_now)
-    post_text, topic = await generate_channel_post(prompt, cta_key, rubric)
-    ok = await send_channel_post(
-        post_text,
-        cta_key,
-        with_photo=cta_key in {"saint", "life"},
-        msk_now=msk_now,
-    )
-    save_channel_post(post_key, date_key, f"{hour:02d}:00", rubric, topic, post_text, "sent" if ok else "failed")
-    if ok:
-        logging.info(f"Канал ТГ: опубликовано — {rubric}")
-        if hour == 7:
-            asyncio.create_task(morning_broadcast())
+    """Публикует один слот. Lock исключает дубль при одновременном старте и плановом цикле."""
+    async with CHANNEL_PUBLISH_LOCK:
+        date_key = msk_now.strftime("%Y-%m-%d")
+        post_key = f"{date_key}_{hour:02d}_{rubric}"
+        if channel_post_exists(post_key):
+            return False
+        if prompt == "__DYNAMIC_SAINT__":
+            prompt = dynamic_saint_prompt(msk_now)
+        visual = select_channel_visual(msk_now, hour, cta_key, rubric)
+        post_text, topic = await generate_channel_post(
+            prompt, cta_key, rubric,
+            visual_prompt_note=visual.get("prompt_note", "") if visual else "",
+        )
+        ok = await send_channel_post(
+            post_text,
+            cta_key,
+            with_photo=bool(visual),
+            msk_now=msk_now,
+            photo_urls=visual.get("urls") if visual else None,
+            visual_title=visual.get("title", "") if visual else "",
+        )
+        save_channel_post(
+            post_key, date_key, f"{hour:02d}:00", rubric, topic, post_text,
+            "sent" if ok else "failed",
+        )
+        if ok:
+            logging.info(f"Канал ТГ: опубликовано — {rubric}")
+            if hour == 7:
+                asyncio.create_task(morning_broadcast())
+        else:
+            logging.error(f"Канал ТГ: не опубликовано — {rubric}; повтор в текущем окне")
+        return ok
+
+
+async def verify_channel_access() -> tuple[bool, str]:
+    """Проверяет, видит ли бот канал и имеет ли право публиковать."""
+    try:
+        me = await bot.get_me()
+        chat = await bot.get_chat(CHANNEL_ID)
+        member = await bot.get_chat_member(CHANNEL_ID, me.id)
+        status = getattr(member, "status", "unknown")
+        can_post = getattr(member, "can_post_messages", None)
+        ok = status in {"administrator", "creator"} and can_post is not False
+        detail = f"канал={getattr(chat, 'title', CHANNEL_ID)}, статус={status}, can_post={can_post}"
+        return ok, detail
+    except Exception as e:
+        return False, f"ошибка проверки доступа: {e}"
+
+
+async def channel_startup_check_and_catchup():
+    """
+    Проверяет доступ к каналу и восстанавливает одну актуальную публикацию после рестарта.
+    Не публикует все пропущенные слоты разом, чтобы не засорять канал.
+    """
+    msk_now = datetime.utcnow() + timedelta(hours=3)
+    access_ok, detail = await verify_channel_access()
+    if access_ok:
+        logging.info(f"Канал ТГ: доступ подтверждён ({detail})")
     else:
-        logging.error(f"Канал ТГ: не опубликовано — {rubric}; повтор в текущем окне")
-    return ok
+        logging.error(f"Канал ТГ: нет подтверждённого доступа ({detail})")
+        try:
+            await bot.send_message(
+                OWNER_ID,
+                "⚠️ Канал «С верой» не прошёл проверку доступа.\n\n"
+                f"{detail}\n\n"
+                "Проверьте, что бот добавлен администратором канала и ему разрешена публикация сообщений.",
+            )
+        except Exception:
+            pass
+        # Всё равно продолжаем: иногда Telegram не даёт прочитать статус, но публикация проходит.
+
+    today_rows = channel_posts_today(msk_now)
+    if today_rows:
+        logging.info(f"Канал ТГ: сегодня уже опубликовано {len(today_rows)} пост(а/ов), catch-up не нужен")
+        return
+
+    slot = latest_due_channel_slot(msk_now)
+    if slot is None:
+        logging.info("Канал ТГ: до первого слота дня, catch-up не нужен")
+        return
+
+    hour, rubric, cta_key, prompt = slot
+    logging.warning(
+        f"Канал ТГ: сегодня публикаций нет; восстанавливаю один актуальный слот "
+        f"{hour:02d}:00 — {rubric}"
+    )
+    await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
 
 
 async def channel_post_loop():
-    """Надёжный автопостинг по МСК с журналом, аналитикой и защитой от повторов."""
-    await asyncio.sleep(15)
+    """Надёжный автопостинг по МСК с журналом, catch-up и защитой от повторов."""
+    await asyncio.sleep(10)
+    try:
+        await channel_startup_check_and_catchup()
+    except Exception as e:
+        logging.exception(f"Канал ТГ: ошибка стартовой проверки/catch-up: {e}")
+
     while True:
         try:
             msk_now = datetime.utcnow() + timedelta(hours=3)
-            slots = build_daily_slots(msk_now) + special_slots(msk_now)
-            for hour, rubric, cta_key, prompt in slots:
+            for hour, rubric, cta_key, prompt in all_channel_slots(msk_now):
                 if msk_now.hour == hour and msk_now.minute < 30:
                     await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
                     await asyncio.sleep(3)
@@ -2975,6 +3293,64 @@ async def cmd_start(message: Message):
 @dp.message(Command("menu"))
 async def cmd_menu(message: Message):
     await message.answer("☦️ Главное меню:", reply_markup=main_menu())
+
+
+@dp.message(Command("channel_status"))
+async def cmd_channel_status(message: Message):
+    """Диагностика канала только для владельца."""
+    if message.from_user.id != OWNER_ID:
+        return
+    msk_now = datetime.utcnow() + timedelta(hours=3)
+    access_ok, detail = await verify_channel_access()
+    rows = channel_posts_today(msk_now)
+    slots = all_channel_slots(msk_now)
+    upcoming = [f"{h:02d}:00 — {rubric}" for h, rubric, _cta, _prompt in slots if h > msk_now.hour]
+    posted = "\n".join(f"✅ {slot} — {rubric}" for slot, rubric, _topic, _created in rows) or "Публикаций сегодня пока нет"
+    next_text = "\n".join(upcoming[:4]) or "Плановых слотов сегодня больше нет"
+    await message.answer(
+        "📊 Статус Telegram-канала\n\n"
+        f"Время МСК: {msk_now:%d.%m.%Y %H:%M}\n"
+        f"Доступ: {'✅' if access_ok else '❌'} {detail}\n\n"
+        f"Сегодня:\n{posted}\n\n"
+        f"Следующие слоты:\n{next_text}"
+    )
+
+
+@dp.message(Command("channel_test"))
+async def cmd_channel_test(message: Message):
+    """Немедленная тестовая публикация в канал только по команде владельца."""
+    if message.from_user.id != OWNER_ID:
+        return
+    msk_now = datetime.utcnow() + timedelta(hours=3)
+    ok = await send_channel_post(
+        "☦️ Проверка связи канала «С верой». Если вы видите эту публикацию, автопостинг и кнопка перехода работают.",
+        "guidance",
+        with_photo=False,
+        msk_now=msk_now,
+    )
+    await message.answer("✅ Тестовый пост отправлен в канал" if ok else "❌ Тестовый пост не отправлен. Смотрите журнал службы.")
+
+
+@dp.message(Command("channel_image_test"))
+async def cmd_channel_image_test(message: Message):
+    """Немедленно проверяет отправку изображения, подписи и deep-link кнопки."""
+    if message.from_user.id != OWNER_ID:
+        return
+    msk_now = datetime.utcnow() + timedelta(hours=3)
+    visual = select_channel_visual(msk_now, 20, "evening", "тест изображения")
+    ok = await send_channel_post(
+        "🖼️ Проверка визуальной публикации\n\nЕсли вы видите изображение, подпись и кнопку, визуальная система канала работает корректно.",
+        "evening",
+        with_photo=True,
+        msk_now=msk_now,
+        photo_urls=visual["urls"],
+        visual_title=visual["title"],
+    )
+    await message.answer(
+        "✅ Тестовый пост с изображением отправлен в Telegram-канал"
+        if ok else
+        "❌ Тестовая публикация с изображением не отправлена. Смотрите журнал службы."
+    )
 
 @dp.callback_query(F.data == "main_menu")
 async def cb_main_menu(callback: CallbackQuery):
