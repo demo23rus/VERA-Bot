@@ -4024,11 +4024,16 @@ async def publish_channel_slot(msk_now, hour, rubric, cta_key, prompt):
         )
         save_post_source(post_key, source, variant)
         if ok:
+            set_app_setting("tg_last_channel_failure", "")
             logging.info(f"Канал ТГ: опубликовано — {rubric}")
             if hour == 7:
                 asyncio.create_task(morning_broadcast())
         else:
-            logging.error(f"Канал ТГ: не опубликовано — {rubric}; повтор в текущем окне")
+            set_app_setting(
+                "tg_last_channel_failure",
+                f"{datetime.now().isoformat()} | {hour:02d}:00 | {rubric}"
+            )
+            logging.error(f"Канал ТГ: не опубликовано — {rubric}; будет автоматический повтор")
         return ok
 
 
@@ -4083,22 +4088,41 @@ async def channel_startup_check_and_catchup():
 
 
 async def channel_post_loop():
-    """Надёжный автопостинг по МСК с журналом, catch-up и защитой от повторов."""
+    """Надёжный автопостинг по МСК с постоянным восстановлением пропусков."""
     await asyncio.sleep(10)
     try:
         await channel_startup_check_and_catchup()
     except Exception as e:
         logging.exception(f"Канал ТГ: ошибка стартовой проверки/catch-up: {e}")
 
+    last_recovery_window = ""
     while True:
         try:
             msk_now = datetime.utcnow() + timedelta(hours=3)
+
+            # Плановый запуск в первые 30 минут слота.
             for hour, rubric, cta_key, prompt in all_channel_slots(msk_now):
                 if msk_now.hour == hour and msk_now.minute < 30:
                     await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
                     await asyncio.sleep(3)
+
+            # Каждые пять минут восстанавливаем один актуальный пропущенный слот.
+            recovery_window = f"{msk_now:%Y-%m-%d-%H}-{msk_now.minute // 5}"
+            if recovery_window != last_recovery_window:
+                last_recovery_window = recovery_window
+                slot = select_catchup_channel_slot(msk_now)
+                if slot is not None:
+                    hour, rubric, cta_key, prompt = slot
+                    logging.warning(
+                        f"Канал ТГ: автоматическое восстановление {hour:02d}:00 — {rubric}"
+                    )
+                    await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
         except Exception as e:
             logging.exception(f"Канал ТГ: ошибка планировщика: {e}")
+            set_app_setting(
+                "tg_last_channel_failure",
+                f"{datetime.now().isoformat()} | scheduler | {str(e)[:500]}"
+            )
         await asyncio.sleep(30)
 
 
@@ -4834,8 +4858,30 @@ async def cmd_channel_status(message: Message):
         f"Время МСК: {msk_now:%d.%m.%Y %H:%M}\n"
         f"Доступ: {'✅' if access_ok else '❌'} {detail}\n\n"
         f"Сегодня:\n{posted}\n\n"
-        f"Следующие слоты:\n{next_text}"
+        f"Следующие слоты:\n{next_text}\n\n"
+        f"Последняя ошибка: {get_app_setting('tg_last_channel_failure', 'нет')}\n"
+        "Ручное восстановление: /channel_recover"
     )
+
+
+@dp.message(Command("channel_recover"))
+async def cmd_channel_recover(message: Message):
+    """Публикует один актуальный пропущенный слот по команде владельца."""
+    if message.from_user.id != OWNER_ID:
+        return
+    msk_now = datetime.utcnow() + timedelta(hours=3)
+    slot = select_catchup_channel_slot(msk_now)
+    if slot is None:
+        await message.answer("✅ Актуальных пропущенных публикаций нет.")
+        return
+    hour, rubric, cta_key, prompt = slot
+    ok = await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
+    if ok:
+        await message.answer(f"✅ Восстановлена публикация {hour:02d}:00 — {rubric}.")
+    else:
+        await message.answer(
+            "⚠️ Публикацию восстановить не удалось. Проверьте /channel_status и журнал службы."
+        )
 
 
 @dp.message(Command("channel_test"))

@@ -2902,8 +2902,29 @@ async def handle_text(chat_id, user_id, text, first_name=""):
             f"{journal}\n\n"
             "Для проверки текста: /channel_test\n"
             "Для проверки изображения: /channel_image_test\n"
+            "Для восстановления пропуска: /channel_recover\n"
             "Для нового закрепа: /publish_channel_intro\n"
-            "Отчёт по воронке: /funnel_report\nПлатежи: /payments_report"
+            "Отчёт по воронке: /funnel_report\n"
+            "Платежи: /payments_report\n\n"
+            f"Последняя ошибка: {get_app_setting('max_last_channel_failure', 'нет')}"
+        )
+        return
+
+    if int(user_id) == int(OWNER_ID) and owner_command in {
+        "/channel_recover", "канал восстановить"
+    }:
+        msk_now = datetime.utcnow() + timedelta(hours=3)
+        slot = select_catchup_channel_slot(msk_now)
+        if slot is None:
+            await send_message(chat_id, "✅ Актуальных пропущенных публикаций нет.")
+            return
+        hour, rubric, cta_key, prompt = slot
+        ok = await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
+        await send_message(
+            chat_id,
+            f"✅ Восстановлена публикация {hour:02d}:00 — {rubric}."
+            if ok else
+            "⚠️ Публикацию восстановить не удалось. Проверьте /channel_status и журнал службы."
         )
         return
 
@@ -4338,13 +4359,18 @@ async def publish_channel_slot(msk_now: datetime, hour: int, rubric: str, cta_ke
         )
         save_post_source(post_key, source, variant)
         if ok:
+            set_app_setting("max_last_channel_failure", "")
             logging.info(f"Канал: успешно опубликовано — {rubric}")
             if hour == 7:
                 asyncio.create_task(morning_broadcast_max())
         else:
+            set_app_setting(
+                "max_last_channel_failure",
+                f"{datetime.now().isoformat()} | {hour:02d}:00 | {rubric}"
+            )
             logging.error(
                 f"Канал: публикация не прошла — {rubric}; "
-                "будет повторена в текущем окне"
+                "будет автоматически повторена"
             )
         return ok
 
@@ -4545,18 +4571,20 @@ async def check_donation_payments_loop_max():
 
 
 async def channel_scheduler():
-    """Автопостинг MAX по МСК с восстановлением после перезапуска."""
+    """Автопостинг MAX по МСК с постоянным восстановлением пропусков."""
     await asyncio.sleep(15)
     last_error_notice = None
+    last_recovery_window = ""
 
-    # Критично: раньше здесь возникал NameError из-за отсутствующего timedelta,
-    # поэтому цикл не доходил до публикаций. Теперь время вычисляется корректно,
-    # а после старта выпускается один последний пропущенный пост.
     try:
         startup_msk = datetime.utcnow() + timedelta(hours=3)
         await publish_latest_missed_slot(startup_msk)
     except Exception as e:
         logging.exception(f"Канал: ошибка восстановления после запуска: {e}")
+        set_app_setting(
+            "max_last_channel_failure",
+            f"{datetime.now().isoformat()} | startup | {str(e)[:500]}"
+        )
         try:
             await send_message(
                 OWNER_ID,
@@ -4572,17 +4600,27 @@ async def channel_scheduler():
             slots = build_daily_slots(msk_now) + special_slots(msk_now)
             for hour, rubric, cta_key, prompt in slots:
                 if msk_now.hour == hour and msk_now.minute < 30:
-                    await publish_channel_slot(
-                        msk_now, hour, rubric, cta_key, prompt
-                    )
+                    await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
                     await asyncio.sleep(3)
+
+            recovery_window = f"{msk_now:%Y-%m-%d-%H}-{msk_now.minute // 5}"
+            if recovery_window != last_recovery_window:
+                last_recovery_window = recovery_window
+                slot = select_catchup_channel_slot(msk_now)
+                if slot is not None:
+                    hour, rubric, cta_key, prompt = slot
+                    logging.warning(
+                        f"Канал MAX: автоматическое восстановление {hour:02d}:00 — {rubric}"
+                    )
+                    await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
         except Exception as e:
             logging.exception(f"Канал: ошибка планировщика: {e}")
+            set_app_setting(
+                "max_last_channel_failure",
+                f"{datetime.now().isoformat()} | scheduler | {str(e)[:500]}"
+            )
             now = datetime.utcnow()
-            if (
-                last_error_notice is None
-                or now - last_error_notice >= timedelta(hours=1)
-            ):
+            if last_error_notice is None or now - last_error_notice >= timedelta(hours=1):
                 last_error_notice = now
                 try:
                     await send_message(
@@ -4594,28 +4632,6 @@ async def channel_scheduler():
                     pass
         await asyncio.sleep(30)
 
-# ========== FASTAPI ==========
-app = FastAPI()
-BACKGROUND_TASKS = set()
-
-def spawn_background(coro):
-    task = asyncio.create_task(coro)
-    BACKGROUND_TASKS.add(task)
-    task.add_done_callback(BACKGROUND_TASKS.discard)
-    return task
-
-@app.on_event("startup")
-async def startup():
-    init_db()
-    await register_webhook()
-    asyncio.create_task(asyncio.to_thread(ensure_review_sheet_schema))
-    asyncio.create_task(channel_scheduler())
-    asyncio.create_task(angel_reminder_loop_max())
-    asyncio.create_task(check_donation_payments_loop_max())
-    asyncio.create_task(nurture_loop_max())
-    asyncio.create_task(weekly_funnel_report_loop_max())
-    asyncio.create_task(database_backup_loop("vera_max"))
-    logging.info("Vera MAX Bot запущен!")
 
 async def _process_webhook_request(request):
     try:
