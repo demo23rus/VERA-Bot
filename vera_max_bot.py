@@ -4633,6 +4633,45 @@ async def channel_scheduler():
         await asyncio.sleep(30)
 
 
+
+# ========== FASTAPI / LIFECYCLE ==========
+app = FastAPI(title="С верой — MAX", version="4.2.1")
+BACKGROUND_TASKS = set()
+
+
+def spawn_background(coro):
+    """Запускает корутину и удерживает ссылку на задачу до её завершения."""
+    task = asyncio.create_task(coro)
+    BACKGROUND_TASKS.add(task)
+    task.add_done_callback(BACKGROUND_TASKS.discard)
+    return task
+
+
+@app.on_event("startup")
+async def startup():
+    """Инициализирует БД, webhook и все постоянные фоновые процессы."""
+    init_db()
+    await register_webhook()
+    spawn_background(asyncio.to_thread(ensure_review_sheet_schema))
+    spawn_background(channel_scheduler())
+    spawn_background(angel_reminder_loop_max())
+    spawn_background(check_donation_payments_loop_max())
+    spawn_background(nurture_loop_max())
+    spawn_background(weekly_funnel_report_loop_max())
+    spawn_background(database_backup_loop("vera_max"))
+    logging.info("Vera MAX Bot V4.2.1 запущен")
+
+
+@app.on_event("shutdown")
+async def shutdown():
+    """Корректно останавливает фоновые задачи при рестарте сервиса."""
+    tasks = list(BACKGROUND_TASKS)
+    for task in tasks:
+        task.cancel()
+    if tasks:
+        await asyncio.gather(*tasks, return_exceptions=True)
+    logging.info("Vera MAX Bot остановлен")
+
 async def _process_webhook_request(request):
     try:
         data = await request.json()
