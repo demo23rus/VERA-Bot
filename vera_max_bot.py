@@ -42,13 +42,35 @@ def load_env(path="/root/.env_vera"):
 _env = load_env()
 logging.basicConfig(level=logging.INFO)
 
+def _config_bool(name: str, default: bool = False) -> bool:
+    raw = _env.get(name)
+    if raw is None:
+        raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return bool(default)
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+def _config_float(name: str, default: float, minimum: float = 1.0, maximum: float = 300.0) -> float:
+    raw = _env.get(name)
+    if raw is None:
+        raw = os.environ.get(name)
+    try:
+        value = float(raw) if raw not in (None, "") else float(default)
+    except (TypeError, ValueError):
+        value = float(default)
+    return max(minimum, min(maximum, value))
+
 # ========== КОНФИГ ==========
 MAX_TOKEN     = _env.get("MAX_TOKEN") or os.environ.get("MAX_TOKEN", "")
 MAX_API       = "https://platform-api.max.ru"
 OPENAI_KEY    = _env.get("OPENAI_KEY") or os.environ.get("OPENAI_KEY", "")
 ANTHROPIC_KEY = _env.get("ANTHROPIC_KEY") or os.environ.get("ANTHROPIC_KEY", "")
-CHANNEL_IMAGE_MODEL = _env.get("CHANNEL_IMAGE_MODEL") or os.environ.get("CHANNEL_IMAGE_MODEL", "gpt-image-1")
+CHANNEL_IMAGE_MODEL = (_env.get("CHANNEL_IMAGE_MODEL") or os.environ.get("CHANNEL_IMAGE_MODEL") or "gpt-image-1").strip()
 CHANNEL_IMAGE_DIR = _env.get("CHANNEL_IMAGE_DIR") or os.environ.get("CHANNEL_IMAGE_DIR", "/root/vera_channel_images_shared")
+# По умолчанию AI-картинки выключены: канал использует Wikimedia и текстовый fallback.
+CHANNEL_AI_IMAGES_ENABLED = _config_bool("CHANNEL_AI_IMAGES_ENABLED", False)
+CHANNEL_IMAGE_TIMEOUT_SECONDS = _config_float("CHANNEL_IMAGE_TIMEOUT_SECONDS", 20.0, 5.0, 45.0)
+CHANNEL_POST_TIMEOUT_SECONDS = _config_float("CHANNEL_POST_TIMEOUT_SECONDS", 75.0, 30.0, 120.0)
 
 
 def _config_int(name: str, default: int) -> int:
@@ -99,7 +121,7 @@ validate_core_config()
 
 # ========== КЛИЕНТЫ AI ==========
 openai_client = AsyncOpenAI(api_key=OPENAI_KEY)
-claude_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+claude_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY, timeout=45.0)
 
 # ========== MAX API ==========
 async def max_request(method, endpoint, data=None):
@@ -2889,8 +2911,9 @@ async def handle_text(chat_id, user_id, text, first_name=""):
         rows = channel_posts_today(msk_now)
         if rows:
             journal = "\n".join(
-                f"• {slot} — {rubric}: {status}"
-                for slot, rubric, status, _ in rows[-20:]
+                f"• {slot} — {rubric}: "
+                f"{status if (status != 'sent' or str(message_id).strip()) else 'unconfirmed'}"
+                for slot, rubric, status, _, message_id in rows[-20:]
             )
         else:
             journal = "Сегодня в журнале ещё нет публикаций."
@@ -2906,7 +2929,9 @@ async def handle_text(chat_id, user_id, text, first_name=""):
             "Для нового закрепа: /publish_channel_intro\n"
             "Отчёт по воронке: /funnel_report\n"
             "Платежи: /payments_report\n\n"
-            f"Последняя ошибка: {get_app_setting('max_last_channel_failure', 'нет')}"
+            f"Последняя ошибка: {get_app_setting('max_last_channel_failure', 'нет')}\n"
+            f"Пульс планировщика: {get_app_setting('max_channel_scheduler_heartbeat', 'ещё не записан')}\n"
+            f"AI-картинки: {'включены' if CHANNEL_AI_IMAGES_ENABLED else 'выключены'}"
         )
         return
 
@@ -3799,19 +3824,22 @@ def get_channel_cta(cta_key: str, source_override: str = ""):
 
 def channel_post_exists(post_key: str) -> bool:
     conn = db_connect()
-    row = conn.execute("SELECT status FROM channel_posts WHERE post_key=?", (post_key,)).fetchone()
+    row = conn.execute(
+        "SELECT status,COALESCE(message_id,'') FROM channel_posts WHERE post_key=?",
+        (post_key,),
+    ).fetchone()
     conn.close()
-    return bool(row and row[0] == "sent")
+    return bool(row and row[0] == "sent" and str(row[1]).strip())
 
 
-def save_channel_post(post_key: str, post_date: str, slot: str, rubric: str, topic: str, content: str, status: str):
+def save_channel_post(post_key: str, post_date: str, slot: str, rubric: str, topic: str, content: str, status: str, message_id: str = ""):
     try:
         conn = db_connect()
         conn.execute(
             """INSERT OR REPLACE INTO channel_posts
-               (post_key,post_date,slot,rubric,topic,content,status,created_at)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            (post_key, post_date, slot, rubric, topic[:250], content[:3900], status, datetime.now().isoformat()),
+               (post_key,post_date,slot,rubric,topic,content,status,created_at,message_id)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (post_key, post_date, slot, rubric, topic[:250], content[:3900], status, datetime.now().isoformat(), str(message_id or "")),
         )
         conn.commit()
         conn.close()
@@ -3823,7 +3851,7 @@ def recent_channel_topics(limit: int = 30) -> str:
     try:
         conn = db_connect()
         rows = conn.execute(
-            "SELECT rubric,topic FROM channel_posts WHERE status='sent' ORDER BY created_at DESC LIMIT ?", (limit,)
+            "SELECT rubric,topic FROM channel_posts WHERE status='sent' AND COALESCE(message_id,'')<>'' ORDER BY created_at DESC LIMIT ?", (limit,)
         ).fetchall()
         conn.close()
         if not rows:
@@ -3898,8 +3926,8 @@ def build_channel_image_prompt(hour: int, cta_key: str, rubric: str) -> str:
 
 
 async def generate_channel_image_bytes(prompt: str, cache_key: str):
-    """Реальная AI-генерация изображения с локальным кэшем."""
-    if not OPENAI_KEY or not prompt:
+    """AI-визуал с жёстким таймаутом. По умолчанию полностью отключён."""
+    if not CHANNEL_AI_IMAGES_ENABLED or not OPENAI_KEY or not prompt or not CHANNEL_IMAGE_MODEL:
         return None
     path = _channel_visual_cache_path(cache_key)
     try:
@@ -3907,32 +3935,32 @@ async def generate_channel_image_bytes(prompt: str, cache_key: str):
             return Path(path).read_bytes()
     except Exception:
         pass
-    models = []
-    for model in (CHANNEL_IMAGE_MODEL, "gpt-image-1-mini"):
-        if model and model not in models:
-            models.append(model)
-    for model in models:
-        try:
-            result = await asyncio.wait_for(
-                openai_client.images.generate(
-                    model=model,
-                    prompt=prompt,
-                    size="1024x1024",
-                    quality="medium",
-                ),
-                timeout=150,
-            )
-            encoded = result.data[0].b64_json if result.data else None
-            if not encoded:
-                raise RuntimeError("API не вернул b64_json")
-            data = base64.b64decode(encoded)
-            if len(data) < 5000:
-                raise RuntimeError("Сгенерированное изображение слишком маленькое")
-            Path(path).write_bytes(data)
-            logging.info(f"Канал: AI-изображение создано и сохранено, model={model}")
-            return data
-        except Exception as e:
-            logging.error(f"Канал: AI-генерация изображения не удалась, model={model}: {e}")
+    try:
+        result = await asyncio.wait_for(
+            openai_client.images.generate(
+                model=CHANNEL_IMAGE_MODEL,
+                prompt=prompt,
+                size="1024x1024",
+                quality="medium",
+            ),
+            timeout=CHANNEL_IMAGE_TIMEOUT_SECONDS,
+        )
+        encoded = result.data[0].b64_json if result.data else None
+        if not encoded:
+            raise RuntimeError("API не вернул b64_json")
+        data = base64.b64decode(encoded)
+        if len(data) < 5000:
+            raise RuntimeError("Сгенерированное изображение слишком маленькое")
+        Path(path).write_bytes(data)
+        logging.info(f"Канал MAX: AI-изображение создано, model={CHANNEL_IMAGE_MODEL}")
+        return data
+    except asyncio.TimeoutError:
+        logging.warning(
+            f"Канал MAX: AI-изображение отключено по таймауту {CHANNEL_IMAGE_TIMEOUT_SECONDS:.0f} сек; "
+            "используется Wikimedia/text fallback"
+        )
+    except Exception as e:
+        logging.error(f"Канал MAX: AI-генерация изображения не удалась: {e}")
     return None
 
 
@@ -3994,32 +4022,33 @@ async def post_to_channel(
     generation_prompt="", cache_key="", prefer_generated=False,
     visual_title="", show_visual_title=False,
 ):
-    """Отправляет визуал: AI-генерация + реальные иконы + чистый текстовый fallback."""
+    """Возвращает подтверждённый MAX message_id либо пустую строку."""
     base_text = clean_channel_markup(text)
     photo_candidates = photo_url if isinstance(photo_url, (list, tuple)) else ([photo_url] if photo_url else [])
 
     async def try_generated():
         data = await generate_channel_image_bytes(generation_prompt, cache_key) if generation_prompt else None
         if not data:
-            return None
+            return ""
         try:
             result = await _send_max_image_bytes(base_text, data, buttons, visual_title="")
-            if result:
-                logging.info("Канал: отправлено реально сгенерированное AI-изображение")
-            return result
+            message_id = _extract_message_id(result)
+            if message_id:
+                logging.info(f"Канал MAX: отправлено AI-изображение, message_id={message_id}")
+            return message_id
         except Exception as e:
-            logging.error(f"Канал: MAX не принял сгенерированное изображение: {e}")
-            return None
+            logging.error(f"Канал MAX: не принял AI-изображение: {e}")
+            return ""
 
     if prefer_generated:
-        result = await try_generated()
-        if result:
-            return True
+        message_id = await try_generated()
+        if message_id:
+            return message_id
 
     for candidate_url in _unique_visual_urls(*photo_candidates):
         try:
-            async with httpx.AsyncClient(timeout=45.0, follow_redirects=True) as client:
-                img = await client.get(candidate_url, headers={"User-Agent": "Mozilla/5.0 VeraBot/3.0"})
+            async with httpx.AsyncClient(timeout=35.0, follow_redirects=True) as client:
+                img = await client.get(candidate_url, headers={"User-Agent": "Mozilla/5.0 VeraBot/4.3"})
                 img.raise_for_status()
                 if len(img.content) < 1000:
                     raise RuntimeError("Изображение пустое или слишком маленькое")
@@ -4027,28 +4056,31 @@ async def post_to_channel(
                     base_text, img.content, buttons,
                     visual_title=visual_title if show_visual_title else "",
                 )
-                if result:
-                    logging.info(f"Канал: реальное изображение+CTA отправлены, url={candidate_url}")
-                    return True
+                message_id = _extract_message_id(result)
+                if message_id:
+                    logging.info(f"Канал MAX: Wikimedia-изображение+CTA отправлены, message_id={message_id}")
+                    return message_id
+                raise RuntimeError(f"MAX не вернул message_id: {result}")
         except Exception as e:
-            logging.error(f"Канал: внешний визуал не отправлен ({candidate_url}): {e}")
+            logging.error(f"Канал MAX: внешний визуал не отправлен ({candidate_url}): {e}")
 
     if not prefer_generated:
-        result = await try_generated()
-        if result:
-            return True
+        message_id = await try_generated()
+        if message_id:
+            return message_id
 
     keyboard = {"type": "inline_keyboard", "payload": {"buttons": buttons}} if buttons else None
     payload = {"text": base_text[:4000]}
     if keyboard:
         payload["attachments"] = [keyboard]
     result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload)
-    if _max_response_ok(result):
-        logging.warning("Канал: публикация отправлена без изображения; подпись об изображении удалена")
-        return True
+    message_id = _extract_message_id(result) if _max_response_ok(result) else ""
+    if message_id:
+        logging.warning(f"Канал MAX: публикация отправлена без изображения, message_id={message_id}")
+        return message_id
     fallback = (base_text + f"\n\nОткрыть нужный раздел: {deep_link or MAX_BOT_URL}")[:4000]
     result2 = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", {"text": fallback})
-    return _max_response_ok(result2)
+    return _extract_message_id(result2) if _max_response_ok(result2) else ""
 
 
 CHANNEL_TITLE_EMOJI = {
@@ -4225,18 +4257,21 @@ async def generate_channel_post(prompt, cta_key, rubric, visual_prompt_note="", 
         "Не пиши стену текста и не повторяй одинаковые вступления."
     )
     try:
-        msg = await asyncio.to_thread(
-            claude_client.messages.create,
-            model="claude-sonnet-4-5",
-            max_tokens=500,
-            system=(
-                "Ты редактор премиального православного медиа. Пиши тепло, спокойно, человечно и без назидательного тона. "
-                "Опирайся на православную традицию. Не представляйся священником, не давай личных благословений, "
-                "не выдумывай цитаты, факты, чудеса, фильмы или церковные правила. "
-                "Каждый абзац должен быть коротким и легко читаться с телефона. "
-                "Не добавляй рекламу: компактный CTA добавит программа. Не используй Markdown-разметку."
+        msg = await asyncio.wait_for(
+            asyncio.to_thread(
+                claude_client.messages.create,
+                model="claude-sonnet-4-5",
+                max_tokens=500,
+                system=(
+                    "Ты редактор премиального православного медиа. Пиши тепло, спокойно, человечно и без назидательного тона. "
+                    "Опирайся на православную традицию. Не представляйся священником, не давай личных благословений, "
+                    "не выдумывай цитаты, факты, чудеса, фильмы или церковные правила. "
+                    "Каждый абзац должен быть коротким и легко читаться с телефона. "
+                    "Не добавляй рекламу: компактный CTA добавит программа. Не используй Markdown-разметку."
+                ),
+                messages=[{"role": "user", "content": full_prompt}],
             ),
-            messages=[{"role": "user", "content": full_prompt}],
+            timeout=45,
         )
         text = msg.content[0].text.strip()
         if len(text) < 60:
@@ -4345,17 +4380,39 @@ async def publish_channel_slot(msk_now: datetime, hour: int, rubric: str, cta_ke
         prefer_generated = bool(visual) and not (hour == 9 or cta_key in {"saint", "life", "story", "showcase_photo"})
         generation_prompt = build_channel_image_prompt(hour, cta_key, rubric) if visual else ""
         cache_key = f"shared:{date_key}:{hour}:{rubric}:{cta_key}"
-        ok = await post_to_channel(
-            text, photo_urls, buttons, deep_link,
-            generation_prompt=generation_prompt,
-            cache_key=cache_key,
-            prefer_generated=prefer_generated,
-            visual_title=visual.get("title", "") if visual else "",
-            show_visual_title=bool(visual) and not prefer_generated,
-        )
+        message_id = ""
+        try:
+            message_id = await asyncio.wait_for(
+                post_to_channel(
+                    text, photo_urls, buttons, deep_link,
+                    generation_prompt=generation_prompt,
+                    cache_key=cache_key,
+                    prefer_generated=prefer_generated,
+                    visual_title=visual.get("title", "") if visual else "",
+                    show_visual_title=bool(visual) and not prefer_generated,
+                ),
+                timeout=CHANNEL_POST_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logging.error(
+                f"Канал MAX: публикация {hour:02d}:00 превысила {CHANNEL_POST_TIMEOUT_SECONDS:.0f} секунд; "
+                "отправляю текстовый fallback"
+            )
+            payload = {"text": clean_channel_markup(text)[:4000]}
+            if buttons:
+                payload["attachments"] = [{"type": "inline_keyboard", "payload": {"buttons": buttons}}]
+            try:
+                fallback_result = await max_request(
+                    "POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload
+                )
+                if _max_response_ok(fallback_result):
+                    message_id = _extract_message_id(fallback_result)
+            except Exception as fallback_error:
+                logging.error(f"Канал MAX: аварийный текстовый fallback не отправлен: {fallback_error}")
+        ok = bool(message_id)
         save_channel_post(
             post_key, date_key, f"{hour:02d}:00", rubric,
-            topic, text, "sent" if ok else "failed"
+            topic, text, "sent" if ok else "failed", message_id=message_id
         )
         save_post_source(post_key, source, variant)
         if ok:
@@ -4381,7 +4438,7 @@ def channel_posts_today(msk_now: datetime):
         date_key = msk_now.strftime("%Y-%m-%d")
         conn = db_connect()
         rows = conn.execute(
-            """SELECT slot,rubric,status,created_at
+            """SELECT slot,rubric,status,created_at,COALESCE(message_id,'')
                FROM channel_posts
                WHERE post_date=?
                ORDER BY slot,created_at""",
@@ -4406,8 +4463,8 @@ def select_catchup_channel_slot(msk_now: datetime):
     date_key = msk_now.strftime("%Y-%m-%d")
     sent_rows = channel_posts_today(msk_now)
     sent_hours = []
-    for slot, _rubric, status, _created in sent_rows:
-        if status == "sent":
+    for slot, _rubric, status, _created, message_id in sent_rows:
+        if status == "sent" and str(message_id).strip():
             try:
                 sent_hours.append(int(str(slot).split(":", 1)[0]))
             except Exception:
@@ -4597,6 +4654,7 @@ async def channel_scheduler():
     while True:
         try:
             msk_now = datetime.utcnow() + timedelta(hours=3)
+            set_app_setting("max_channel_scheduler_heartbeat", msk_now.isoformat())
             slots = build_daily_slots(msk_now) + special_slots(msk_now)
             for hour, rubric, cta_key, prompt in slots:
                 if msk_now.hour == hour and msk_now.minute < 30:
@@ -4634,8 +4692,68 @@ async def channel_scheduler():
 
 
 
+async def channel_scheduler_supervisor():
+    """Перезапускает планировщик, если его задача неожиданно завершилась."""
+    while True:
+        task = asyncio.create_task(channel_scheduler())
+        try:
+            await task
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        except Exception as e:
+            logging.exception(f"Канал MAX: планировщик аварийно завершился: {e}")
+            set_app_setting("max_last_channel_failure", f"{datetime.now().isoformat()} | supervisor | {str(e)[:500]}")
+            try:
+                await send_message(OWNER_ID, f"⚠️ Планировщик MAX-канала перезапускается.\n\n{str(e)[:700]}")
+            except Exception:
+                pass
+        await asyncio.sleep(10)
+
+
+async def channel_watchdog_loop():
+    """Проверяет heartbeat и через 10 минут восстанавливает актуальный пропуск."""
+    await asyncio.sleep(90)
+    while True:
+        try:
+            msk_now = datetime.utcnow() + timedelta(hours=3)
+            heartbeat = get_app_setting("max_channel_scheduler_heartbeat", "")
+            if heartbeat:
+                try:
+                    age = (msk_now - datetime.fromisoformat(heartbeat)).total_seconds()
+                except Exception:
+                    age = 0
+                if age > 240:
+                    alert_key = f"max_scheduler_stale_{msk_now:%Y%m%d%H}"
+                    if not get_app_setting(alert_key, ""):
+                        set_app_setting(alert_key, "1")
+                        try:
+                            await send_message(OWNER_ID, f"⚠️ Нет пульса планировщика MAX уже {int(age)} секунд. Запущено автоматическое восстановление.")
+                        except Exception:
+                            pass
+            slot = select_catchup_channel_slot(msk_now)
+            if slot is not None:
+                hour, rubric, cta_key, prompt = slot
+                slot_time = msk_now.replace(hour=hour, minute=0, second=0, microsecond=0)
+                if (msk_now - slot_time).total_seconds() >= 600:
+                    ok = await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
+                    if not ok:
+                        alert_key = f"max_missed_alert_{msk_now:%Y%m%d}_{hour:02d}_{rubric}"
+                        if not get_app_setting(alert_key, ""):
+                            set_app_setting(alert_key, "1")
+                            try:
+                                await send_message(OWNER_ID, f"⚠️ Не удалось выпустить пост MAX {hour:02d}:00 — {rubric}. Проверьте /channel_status.")
+                            except Exception:
+                                pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logging.exception(f"Канал MAX: ошибка watchdog: {e}")
+        await asyncio.sleep(120)
+
+
 # ========== FASTAPI / LIFECYCLE ==========
-app = FastAPI(title="С верой — MAX", version="4.2.1")
+app = FastAPI(title="С верой — MAX", version="4.3.1")
 BACKGROUND_TASKS = set()
 
 
@@ -4653,13 +4771,14 @@ async def startup():
     init_db()
     await register_webhook()
     spawn_background(asyncio.to_thread(ensure_review_sheet_schema))
-    spawn_background(channel_scheduler())
+    spawn_background(channel_scheduler_supervisor())
+    spawn_background(channel_watchdog_loop())
     spawn_background(angel_reminder_loop_max())
     spawn_background(check_donation_payments_loop_max())
     spawn_background(nurture_loop_max())
     spawn_background(weekly_funnel_report_loop_max())
     spawn_background(database_backup_loop("vera_max"))
-    logging.info("Vera MAX Bot V4.2.1 запущен")
+    logging.info("Vera MAX Bot V4.3.1 запущен; AI images=%s", CHANNEL_AI_IMAGES_ENABLED)
 
 
 @app.on_event("shutdown")

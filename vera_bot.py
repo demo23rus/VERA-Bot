@@ -58,6 +58,24 @@ def load_env(path="/root/.env_vera"):
 
 _env = load_env()
 
+def _config_bool(name: str, default: bool = False) -> bool:
+    raw = _env.get(name)
+    if raw is None:
+        raw = os.environ.get(name)
+    if raw is None or str(raw).strip() == "":
+        return bool(default)
+    return str(raw).strip().lower() not in {"0", "false", "no", "off"}
+
+def _config_float(name: str, default: float, minimum: float = 1.0, maximum: float = 300.0) -> float:
+    raw = _env.get(name)
+    if raw is None:
+        raw = os.environ.get(name)
+    try:
+        value = float(raw) if raw not in (None, "") else float(default)
+    except (TypeError, ValueError):
+        value = float(default)
+    return max(minimum, min(maximum, value))
+
 # ========== КОНФИГ ==========
 BOT_TOKEN         = _env.get("TELEGRAM_BOT_TOKEN") or os.environ.get("TELEGRAM_BOT_TOKEN", "")
 CHANNEL_ID        = _env.get("TELEGRAM_CHANNEL_ID") or os.environ.get("TELEGRAM_CHANNEL_ID", "@SvyatoyPut")
@@ -65,8 +83,12 @@ BOT_USERNAME      = _env.get("TELEGRAM_BOT_USERNAME") or os.environ.get("TELEGRA
 BOT_URL           = f"https://t.me/{BOT_USERNAME}"
 OPENAI_KEY        = _env.get("OPENAI_KEY") or os.environ.get("OPENAI_KEY", "")
 ANTHROPIC_KEY     = _env.get("ANTHROPIC_KEY") or os.environ.get("ANTHROPIC_KEY", "")
-CHANNEL_IMAGE_MODEL = _env.get("CHANNEL_IMAGE_MODEL") or os.environ.get("CHANNEL_IMAGE_MODEL", "gpt-image-1")
+CHANNEL_IMAGE_MODEL = (_env.get("CHANNEL_IMAGE_MODEL") or os.environ.get("CHANNEL_IMAGE_MODEL") or "gpt-image-1").strip()
 CHANNEL_IMAGE_DIR = _env.get("CHANNEL_IMAGE_DIR") or os.environ.get("CHANNEL_IMAGE_DIR", "/root/vera_channel_images_shared")
+# По умолчанию AI-картинки выключены: канал использует Wikimedia и текстовый fallback.
+CHANNEL_AI_IMAGES_ENABLED = _config_bool("CHANNEL_AI_IMAGES_ENABLED", False)
+CHANNEL_IMAGE_TIMEOUT_SECONDS = _config_float("CHANNEL_IMAGE_TIMEOUT_SECONDS", 20.0, 5.0, 45.0)
+CHANNEL_POST_TIMEOUT_SECONDS = _config_float("CHANNEL_POST_TIMEOUT_SECONDS", 75.0, 30.0, 120.0)
 
 def require_int_config(name: str) -> int:
     raw_value = _env.get(name) or os.environ.get(name)
@@ -465,8 +487,8 @@ def build_channel_image_prompt(hour: int, cta_key: str, rubric: str) -> str:
 
 
 async def generate_channel_image_bytes(prompt: str, cache_key: str):
-    """Реальная AI-генерация изображения с локальным кэшем."""
-    if not OPENAI_KEY or not prompt:
+    """AI-визуал с жёстким таймаутом. По умолчанию полностью отключён."""
+    if not CHANNEL_AI_IMAGES_ENABLED or not OPENAI_KEY or not prompt or not CHANNEL_IMAGE_MODEL:
         return None
     path = _channel_visual_cache_path(cache_key)
     try:
@@ -475,33 +497,33 @@ async def generate_channel_image_bytes(prompt: str, cache_key: str):
                 return fh.read()
     except Exception:
         pass
-    models = []
-    for model in (CHANNEL_IMAGE_MODEL, "gpt-image-1-mini"):
-        if model and model not in models:
-            models.append(model)
-    for model in models:
-        try:
-            result = await asyncio.wait_for(
-                openai_client.images.generate(
-                    model=model,
-                    prompt=prompt,
-                    size="1024x1024",
-                    quality="medium",
-                ),
-                timeout=150,
-            )
-            encoded = result.data[0].b64_json if result.data else None
-            if not encoded:
-                raise RuntimeError("API не вернул b64_json")
-            data = base64.b64decode(encoded)
-            if len(data) < 5000:
-                raise RuntimeError("Сгенерированное изображение слишком маленькое")
-            with open(path, "wb") as fh:
-                fh.write(data)
-            logging.info(f"Канал ТГ: AI-изображение создано и сохранено, model={model}")
-            return data
-        except Exception as e:
-            logging.error(f"Канал ТГ: AI-генерация изображения не удалась, model={model}: {e}")
+    try:
+        result = await asyncio.wait_for(
+            openai_client.images.generate(
+                model=CHANNEL_IMAGE_MODEL,
+                prompt=prompt,
+                size="1024x1024",
+                quality="medium",
+            ),
+            timeout=CHANNEL_IMAGE_TIMEOUT_SECONDS,
+        )
+        encoded = result.data[0].b64_json if result.data else None
+        if not encoded:
+            raise RuntimeError("API не вернул b64_json")
+        data = base64.b64decode(encoded)
+        if len(data) < 5000:
+            raise RuntimeError("Сгенерированное изображение слишком маленькое")
+        with open(path, "wb") as fh:
+            fh.write(data)
+        logging.info(f"Канал ТГ: AI-изображение создано, model={CHANNEL_IMAGE_MODEL}")
+        return data
+    except asyncio.TimeoutError:
+        logging.warning(
+            f"Канал ТГ: AI-изображение отключено по таймауту {CHANNEL_IMAGE_TIMEOUT_SECONDS:.0f} сек; "
+            "используется Wikimedia/text fallback"
+        )
+    except Exception as e:
+        logging.error(f"Канал ТГ: AI-генерация изображения не удалась: {e}")
     return None
 
 
@@ -537,8 +559,8 @@ async def send_channel_post(
     cache_key: str = "",
     prefer_generated: bool = False,
     show_visual_title: bool = False,
-) -> bool:
-    """AI-генерация + реальные иконы + чистый текстовый fallback."""
+):
+    """Возвращает реальный Telegram message_id либо пустую строку."""
     base_text = clean_channel_markup(text)
     reply_markup = channel_button(cta_key, source_override)
     final_text = add_channel_cta(base_text, cta_key)
@@ -556,22 +578,24 @@ async def send_channel_post(
     async def try_generated():
         data = await generate_channel_image_bytes(generation_prompt, cache_key) if generation_prompt else None
         if not data:
-            return False
+            return ""
         try:
-            await bot.send_photo(
+            posted = await bot.send_photo(
                 CHANNEL_ID,
                 photo=BufferedInputFile(data, filename="vera_generated.png"),
                 caption=make_caption(""),
                 reply_markup=reply_markup,
             )
-            logging.info("Канал ТГ: отправлено реально сгенерированное AI-изображение")
-            return True
+            logging.info("Канал ТГ: отправлено AI-изображение")
+            return str(posted.message_id)
         except Exception as e:
-            logging.error(f"Канал ТГ: сгенерированное изображение не отправлено: {e}")
-            return False
+            logging.error(f"Канал ТГ: AI-изображение не отправлено: {e}")
+            return ""
 
-    if with_photo and prefer_generated and await try_generated():
-        return True
+    if with_photo and prefer_generated:
+        generated_id = await try_generated()
+        if generated_id:
+            return generated_id
 
     if with_photo:
         candidates = photo_urls if isinstance(photo_urls, (list, tuple)) else ([photo_urls] if photo_urls else [])
@@ -582,42 +606,44 @@ async def send_channel_post(
             try:
                 photo_file = await download_channel_image(icon_url)
                 if photo_file is not None:
-                    await bot.send_photo(
+                    posted = await bot.send_photo(
                         CHANNEL_ID,
                         photo=photo_file,
                         caption=make_caption(visual_title if show_visual_title else ""),
                         reply_markup=reply_markup,
                     )
                 else:
-                    await bot.send_photo(
+                    posted = await bot.send_photo(
                         CHANNEL_ID,
                         photo=icon_url,
                         caption=make_caption(visual_title if show_visual_title else ""),
                         reply_markup=reply_markup,
                     )
-                logging.info(f"Канал ТГ: реальное изображение+CTA отправлены, url={icon_url}")
-                return True
+                logging.info(f"Канал ТГ: Wikimedia-изображение+CTA отправлены, message_id={posted.message_id}")
+                return str(posted.message_id)
             except Exception as e:
                 logging.error(f"Канал ТГ: внешний визуал не отправлен ({icon_url}): {e}")
 
-    if with_photo and not prefer_generated and await try_generated():
-        return True
+    if with_photo and not prefer_generated:
+        generated_id = await try_generated()
+        if generated_id:
+            return generated_id
 
     try:
-        await bot.send_message(CHANNEL_ID, final_text[:4096], reply_markup=reply_markup)
+        posted = await bot.send_message(CHANNEL_ID, final_text[:4096], reply_markup=reply_markup)
         if with_photo:
-            logging.warning("Канал ТГ: публикация отправлена без изображения; подпись об изображении удалена")
-        return True
+            logging.warning("Канал ТГ: публикация отправлена без изображения")
+        return str(posted.message_id)
     except Exception as e:
         logging.error(f"Канал ТГ: отправка с кнопкой не удалась: {e}")
         try:
             _footer, _label, source = CHANNEL_CTA.get(cta_key, CHANNEL_CTA["guidance"])
             fallback = f"{final_text}\n\nОткрыть нужный раздел: {BOT_URL}?start={source}"
-            await bot.send_message(CHANNEL_ID, fallback[:4096])
-            return True
+            posted = await bot.send_message(CHANNEL_ID, fallback[:4096])
+            return str(posted.message_id)
         except Exception as fallback_error:
             logging.error(f"Канал ТГ: резервная отправка не удалась: {fallback_error}")
-            return False
+            return ""
 
 logging.basicConfig(level=logging.INFO)
 logging.info(f"OPENAI_KEY: {'configured' if OPENAI_KEY else 'missing'}")
@@ -654,7 +680,7 @@ else:
 
 # ========== КЛИЕНТЫ AI ==========
 openai_client = AsyncOpenAI(api_key=OPENAI_KEY)
-claude_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY)
+claude_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY, timeout=45.0)
 
 async def claude_messages_create(**kwargs):
     """Не блокирует event loop во время синхронного запроса Anthropic."""
@@ -3639,9 +3665,12 @@ async def get_daily_gospel() -> str:
 
 def channel_post_exists(post_key: str) -> bool:
     conn = db_connect()
-    row = conn.execute("SELECT status FROM channel_posts WHERE post_key=?", (post_key,)).fetchone()
+    row = conn.execute(
+        "SELECT status,COALESCE(message_id,'') FROM channel_posts WHERE post_key=?",
+        (post_key,),
+    ).fetchone()
     conn.close()
-    return bool(row and row[0] == "sent")
+    return bool(row and row[0] == "sent" and str(row[1]).strip())
 
 
 def channel_posts_today(msk_now: datetime = None):
@@ -3653,7 +3682,7 @@ def channel_posts_today(msk_now: datetime = None):
         rows = conn.execute(
             """SELECT slot, rubric, topic, created_at
                FROM channel_posts
-               WHERE post_date=? AND status='sent'
+               WHERE post_date=? AND status='sent' AND COALESCE(message_id,'')<>''
                ORDER BY slot, created_at""",
             (date_key,),
         ).fetchall()
@@ -3701,14 +3730,14 @@ def select_catchup_channel_slot(msk_now: datetime):
     return max(visual or recent, key=lambda item: item[0])
 
 
-def save_channel_post(post_key, post_date, slot, rubric, topic, content, status):
+def save_channel_post(post_key, post_date, slot, rubric, topic, content, status, message_id=""):
     try:
         conn = db_connect()
         conn.execute(
             """INSERT OR REPLACE INTO channel_posts
-               (post_key,post_date,slot,rubric,topic,content,status,created_at)
-               VALUES (?,?,?,?,?,?,?,?)""",
-            (post_key, post_date, slot, rubric, topic[:250], content[:4000], status, datetime.now().isoformat()),
+               (post_key,post_date,slot,rubric,topic,content,status,created_at,message_id)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (post_key, post_date, slot, rubric, topic[:250], content[:4000], status, datetime.now().isoformat(), str(message_id or "")),
         )
         conn.commit()
         conn.close()
@@ -3720,7 +3749,7 @@ def recent_channel_topics(limit: int = 35) -> str:
     try:
         conn = db_connect()
         rows = conn.execute(
-            "SELECT rubric,topic FROM channel_posts WHERE status='sent' ORDER BY created_at DESC LIMIT ?",
+            "SELECT rubric,topic FROM channel_posts WHERE status='sent' AND COALESCE(message_id,'')<>'' ORDER BY created_at DESC LIMIT ?",
             (limit,),
         ).fetchall()
         conn.close()
@@ -3908,7 +3937,8 @@ async def generate_channel_post(prompt: str, cta_key: str, rubric: str, visual_p
         "Не пиши стену текста и не повторяй одинаковые вступления."
     )
     try:
-        msg = await claude_messages_create(
+        msg = await asyncio.wait_for(
+            claude_messages_create(
             model="claude-sonnet-4-5",
             max_tokens=480,
             system=(
@@ -3918,7 +3948,9 @@ async def generate_channel_post(prompt: str, cta_key: str, rubric: str, visual_p
                 "Каждый абзац должен быть коротким и легко читаться с телефона. "
                 "Не добавляй рекламу: компактный CTA добавит программа. Не используй Markdown-разметку."
             ),
-            messages=[{"role": "user", "content": full_prompt}],
+                messages=[{"role": "user", "content": full_prompt}],
+            ),
+            timeout=45,
         )
         post_text = msg.content[0].text.strip()
         if len(post_text) < 60:
@@ -4005,22 +4037,46 @@ async def publish_channel_slot(msk_now, hour, rubric, cta_key, prompt):
             visual_prompt_note=visual.get("prompt_note", "") if visual else "",
         )
         prefer_generated = bool(visual) and not (hour == 9 or cta_key in {"saint", "life", "story", "showcase_photo"})
-        ok = await send_channel_post(
-            post_text,
-            cta_key,
-            with_photo=bool(visual),
-            msk_now=msk_now,
-            photo_urls=visual.get("urls") if visual else None,
-            visual_title=visual.get("title", "") if visual else "",
-            source_override=source,
-            generation_prompt=build_channel_image_prompt(hour, cta_key, rubric) if visual else "",
-            cache_key=f"shared:{date_key}:{hour}:{rubric}:{cta_key}",
-            prefer_generated=prefer_generated,
-            show_visual_title=bool(visual) and not prefer_generated,
-        )
+        message_id = ""
+        try:
+            message_id = await asyncio.wait_for(
+                send_channel_post(
+                    post_text,
+                    cta_key,
+                    with_photo=bool(visual),
+                    msk_now=msk_now,
+                    photo_urls=visual.get("urls") if visual else None,
+                    visual_title=visual.get("title", "") if visual else "",
+                    source_override=source,
+                    generation_prompt=build_channel_image_prompt(hour, cta_key, rubric) if visual else "",
+                    cache_key=f"shared:{date_key}:{hour}:{rubric}:{cta_key}",
+                    prefer_generated=prefer_generated,
+                    show_visual_title=bool(visual) and not prefer_generated,
+                ),
+                timeout=CHANNEL_POST_TIMEOUT_SECONDS,
+            )
+        except asyncio.TimeoutError:
+            logging.error(
+                f"Канал ТГ: публикация {hour:02d}:00 превысила {CHANNEL_POST_TIMEOUT_SECONDS:.0f} секунд; "
+                "отправляю текстовый fallback"
+            )
+            try:
+                fallback_text = add_channel_cta(clean_channel_markup(post_text), cta_key)[:4096]
+                posted = await asyncio.wait_for(
+                    bot.send_message(
+                        CHANNEL_ID,
+                        fallback_text,
+                        reply_markup=channel_button(cta_key, source),
+                    ),
+                    timeout=30,
+                )
+                message_id = str(posted.message_id)
+            except Exception as fallback_error:
+                logging.error(f"Канал ТГ: аварийный текстовый fallback не отправлен: {fallback_error}")
+        ok = bool(message_id)
         save_channel_post(
             post_key, date_key, f"{hour:02d}:00", rubric, topic, post_text,
-            "sent" if ok else "failed",
+            "sent" if ok else "failed", message_id=message_id,
         )
         save_post_source(post_key, source, variant)
         if ok:
@@ -4099,6 +4155,7 @@ async def channel_post_loop():
     while True:
         try:
             msk_now = datetime.utcnow() + timedelta(hours=3)
+            set_app_setting("tg_channel_scheduler_heartbeat", msk_now.isoformat())
 
             # Плановый запуск в первые 30 минут слота.
             for hour, rubric, cta_key, prompt in all_channel_slots(msk_now):
@@ -4124,6 +4181,66 @@ async def channel_post_loop():
                 f"{datetime.now().isoformat()} | scheduler | {str(e)[:500]}"
             )
         await asyncio.sleep(30)
+
+
+async def channel_scheduler_supervisor():
+    """Перезапускает планировщик, если его задача неожиданно завершилась."""
+    while True:
+        task = asyncio.create_task(channel_post_loop())
+        try:
+            await task
+        except asyncio.CancelledError:
+            task.cancel()
+            raise
+        except Exception as e:
+            logging.exception(f"Канал ТГ: планировщик аварийно завершился: {e}")
+            set_app_setting("tg_last_channel_failure", f"{datetime.now().isoformat()} | supervisor | {str(e)[:500]}")
+            try:
+                await bot.send_message(OWNER_ID, f"⚠️ Планировщик Telegram-канала перезапускается.\n\n{str(e)[:700]}")
+            except Exception:
+                pass
+        await asyncio.sleep(10)
+
+
+async def channel_watchdog_loop():
+    """Проверяет heartbeat и через 10 минут восстанавливает актуальный пропуск."""
+    await asyncio.sleep(90)
+    while True:
+        try:
+            msk_now = datetime.utcnow() + timedelta(hours=3)
+            heartbeat = get_app_setting("tg_channel_scheduler_heartbeat", "")
+            if heartbeat:
+                try:
+                    age = (msk_now - datetime.fromisoformat(heartbeat)).total_seconds()
+                except Exception:
+                    age = 0
+                if age > 240:
+                    alert_key = f"tg_scheduler_stale_{msk_now:%Y%m%d%H}"
+                    if not get_app_setting(alert_key, ""):
+                        set_app_setting(alert_key, "1")
+                        try:
+                            await bot.send_message(OWNER_ID, f"⚠️ Нет пульса планировщика Telegram уже {int(age)} секунд. Запущено автоматическое восстановление.")
+                        except Exception:
+                            pass
+            slot = select_catchup_channel_slot(msk_now)
+            if slot is not None:
+                hour, rubric, cta_key, prompt = slot
+                slot_time = msk_now.replace(hour=hour, minute=0, second=0, microsecond=0)
+                if (msk_now - slot_time).total_seconds() >= 600:
+                    ok = await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
+                    if not ok:
+                        alert_key = f"tg_missed_alert_{msk_now:%Y%m%d}_{hour:02d}_{rubric}"
+                        if not get_app_setting(alert_key, ""):
+                            set_app_setting(alert_key, "1")
+                            try:
+                                await bot.send_message(OWNER_ID, f"⚠️ Не удалось выпустить пост Telegram {hour:02d}:00 — {rubric}. Проверьте /channel_status.")
+                            except Exception:
+                                pass
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            logging.exception(f"Канал ТГ: ошибка watchdog: {e}")
+        await asyncio.sleep(120)
 
 
 # ========== НАПОМИНАНИЯ О ДНЕ АНГЕЛА ==========
@@ -4860,6 +4977,8 @@ async def cmd_channel_status(message: Message):
         f"Сегодня:\n{posted}\n\n"
         f"Следующие слоты:\n{next_text}\n\n"
         f"Последняя ошибка: {get_app_setting('tg_last_channel_failure', 'нет')}\n"
+        f"Пульс планировщика: {get_app_setting('tg_channel_scheduler_heartbeat', 'ещё не записан')}\n"
+        f"AI-картинки: {'включены' if CHANNEL_AI_IMAGES_ENABLED else 'выключены'}\n"
         "Ручное восстановление: /channel_recover"
     )
 
@@ -6579,12 +6698,17 @@ async def handle_text(message: Message):
 async def main():
     init_db()
     asyncio.create_task(asyncio.to_thread(ensure_review_sheet_schema_tg))
-    asyncio.create_task(channel_post_loop())
+    asyncio.create_task(channel_scheduler_supervisor())
+    asyncio.create_task(channel_watchdog_loop())
     asyncio.create_task(angel_reminder_loop())
     asyncio.create_task(check_donation_payments_loop_tg())
     asyncio.create_task(nurture_loop_tg())
     asyncio.create_task(weekly_funnel_report_loop_tg())
     asyncio.create_task(database_backup_loop("vera_tg"))
+    logging.info(
+        "Vera Telegram V4.3 channel reliability started; AI images=%s",
+        CHANNEL_AI_IMAGES_ENABLED,
+    )
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
