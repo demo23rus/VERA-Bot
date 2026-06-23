@@ -2922,8 +2922,7 @@ async def handle_text(chat_id, user_id, text, first_name=""):
             "Отчёт по воронке: /funnel_report\n"
             "Платежи: /payments_report\n\n"
             f"Последняя ошибка: {get_app_setting('max_last_channel_failure', 'нет')}\n"
-            f"Пульс планировщика: {get_app_setting('max_channel_scheduler_heartbeat', 'ещё не записан')}\n"
-            f"AI-картинки: {'включены' if CHANNEL_AI_IMAGES_ENABLED else 'выключены'}"
+            f"Пульс планировщика: {get_app_setting('max_channel_scheduler_heartbeat', 'ещё не записан')}"
         )
         return
 
@@ -4336,7 +4335,7 @@ async def startup():
     spawn_background(nurture_loop_max())
     spawn_background(weekly_funnel_report_loop_max())
     spawn_background(database_backup_loop("vera_max"))
-    logging.info("Vera MAX Bot V4.3.1 запущен; AI images=%s", CHANNEL_AI_IMAGES_ENABLED)
+    logging.info("Vera MAX Bot запущен в текстовом режиме")
 
 
 @app.on_event("shutdown")

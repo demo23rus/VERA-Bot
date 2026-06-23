@@ -4576,7 +4576,6 @@ async def cmd_channel_status(message: Message):
         f"Следующие слоты:\n{next_text}\n\n"
         f"Последняя ошибка: {get_app_setting('tg_last_channel_failure', 'нет')}\n"
         f"Пульс планировщика: {get_app_setting('tg_channel_scheduler_heartbeat', 'ещё не записан')}\n"
-        f"AI-картинки: {'включены' if CHANNEL_AI_IMAGES_ENABLED else 'выключены'}\n"
         "Ручное восстановление: /channel_recover"
     )
 
@@ -6283,10 +6282,7 @@ async def main():
     asyncio.create_task(nurture_loop_tg())
     asyncio.create_task(weekly_funnel_report_loop_tg())
     asyncio.create_task(database_backup_loop("vera_tg"))
-    logging.info(
-        "Vera Telegram V4.3 channel reliability started; AI images=%s",
-        CHANNEL_AI_IMAGES_ENABLED,
-    )
+    logging.info("Vera Telegram запущен в текстовом режиме")
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
