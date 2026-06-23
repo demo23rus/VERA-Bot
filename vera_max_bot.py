@@ -1133,7 +1133,7 @@ FUNNEL_USEFUL_CALLBACKS = {
 }
 
 FUNNEL_TRACK_BY_TARGET = {
-    "prayers": "prayer", "prayer_evening_ru": "prayer", "saints": "saint",
+    "prayers": "prayer", "prayer_of_day": "prayer", "prayer_for_me": "prayer", "prayer_evening_ru": "prayer", "saints": "saint", "saint_search": "saint",
     "ask_question": "support", "photo_icon": "icon", "photo_church": "icon",
     "sacr_ispoved": "confession", "sacraments": "confession",
     "daily_gospel": "gospel", "library": "gospel", "find_church": "church",
@@ -2360,24 +2360,24 @@ async def handle_start(chat_id, user_id, first_name, username, start_payload="")
     # Deep-link источники канала. Каждый источник одновременно открывает
     # обещанную функцию и записывается в аналитику воронки.
     channel_routes = {
-        "ch_morning": "prayers",
+        "ch_morning": "prayer_of_day",
         "ch_quote": "ask_question",
-        "ch_saint": "saints",
+        "ch_saint": "saint_search",
         "ch_guidance": "ask_question",
-        "ch_practical": "sacraments",
-        "ch_story": "saints",
+        "ch_practical": "sacr_ispoved",
+        "ch_story": "saint_search",
         "ch_evening": "prayer_evening_ru",
         "ch_qa": "ask_question",
-        "ch_life": "saints",
+        "ch_life": "saint_search",
         "ch_film": "library",
         "ch_gospel": "daily_gospel",
         "ch_photo": "photo_icon",
         "ch_church": "find_church",
         "ch_profile": "profile",
         "ch_calendar": "calendar",
-        "ch_showcase_prayer": "prayers",
+        "ch_showcase_prayer": "prayer_for_me",
         "ch_showcase_photo": "photo_icon",
-        "ch_showcase_angel": "saints",
+        "ch_showcase_angel": "saint_search",
         "ch_showcase_confession": "sacr_ispoved",
         "ch_interactive": "interactive_menu",
         "ch_community": "ask_question",
@@ -2401,6 +2401,7 @@ async def handle_start(chat_id, user_id, first_name, username, start_payload="")
         actual_source = raw_start_payload or base_start_payload
         track_funnel_event(user_id, "MAX", "channel_click", source=actual_source, target=target_payload)
         await handle_callback(chat_id, user_id, target_payload, first_name)
+        track_funnel_event(user_id, "MAX", "result_delivered", source=actual_source, target=target_payload)
         return
 
     # Прямые deep-link сценарии оставлены для совместимости со старыми постами.
@@ -2408,6 +2409,7 @@ async def handle_start(chat_id, user_id, first_name, username, start_payload="")
         "prayers", "saints", "daily_gospel", "ask_question",
         "prayer_evening_ru", "library", "photo_icon", "find_church",
         "sacraments", "calendar", "main_menu", "profile", "sacr_ispoved",
+        "prayer_of_day", "prayer_for_me", "saint_search",
     }
     if start_payload in allowed_payloads:
         await handle_callback(chat_id, user_id, start_payload, first_name)
@@ -2438,6 +2440,8 @@ async def handle_start(chat_id, user_id, first_name, username, start_payload="")
 async def handle_callback(chat_id, user_id, payload, first_name=""):
     touch_user_session(user_id, "MAX", target=payload)
     touch_funnel_user(user_id, "MAX", increment_visit=False)
+    if payload in {"notifications_yes", "prayer_for_me", "find_church", "ask_question", "profile", "journey_stop", "invite_friend", "review", "donate"}:
+        track_funnel_event(user_id, "MAX", "next_step_clicked", target=payload)
     if await handle_funnel_callback_max(chat_id, user_id, payload, first_name):
         return
     if payload in FUNNEL_USEFUL_CALLBACKS:
@@ -2523,10 +2527,14 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
         feast_line = ("🎉 " + feast + "\n\n") if feast else ""
         await send_message(chat_id,
             "✨ Молитва дня — " + day_str + "\n\n" + feast_line + prayer,
-            [[btn("🙏 Все молитвы", "prayers"), btn("🏠 Меню", "main_menu")]]
+            [
+                [btn("🔔 Получать молитву утром", "notifications_yes")],
+                [btn("🙏 Подобрать молитву по ситуации", "prayer_for_me")],
+                [btn("🏠 Главное меню", "main_menu")],
+            ]
         )
 
-    elif payload.startswith("prayer_"):
+    elif payload.startswith("prayer_") and payload != "prayer_for_me":
         key = payload
         prayer_data = PRAYER_TEXTS.get(key)
         if prayer_data:
@@ -2789,7 +2797,9 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
         await send_message(chat_id, "📖 Нахожу Евангельская мысль...")
         text = await get_daily_gospel_max()
         await send_message(chat_id, text, [
-            [btn("📅 Календарь", "calendar"), btn("🏠 Меню", "main_menu")]
+            [btn("🙏 Молитва по моей ситуации", "prayer_for_me")],
+            [btn("❓ Задать вопрос", "ask_question")],
+            [btn("🏠 Главное меню", "main_menu")],
         ])
 
     elif payload == "cal_fast_today":
@@ -3573,46 +3583,48 @@ def build_channel_image_prompt(*args, **kwargs):
     return ""
 
 CHANNEL_CTA = {
-    "morning": ("🙏 Откройте молитву дня в помощнике.", "🙏 Открыть молитвы", "ch_morning"),
-    "quote": ("❓ Хотите разобраться глубже? Спросите помощника.", "❓ Задать вопрос", "ch_quote"),
-    "saint": ("👼 Найдите святого и возможные дни его памяти.", "👼 Найти святого", "ch_saint"),
-    "guidance": ("❓ Расскажите помощнику, что сейчас волнует.", "❓ Обратиться к помощнику", "ch_guidance"),
-    "practical": ("⛪ Откройте пошаговую памятку в помощнике.", "⛪ Открыть памятку", "ch_practical"),
-    "story": ("👼 Найдите святого по имени и дням памяти.", "👼 Найти святого", "ch_story"),
-    "evening": ("🌙 Откройте вечернюю молитву.", "🌙 Вечерняя молитва", "ch_evening"),
-    "qa": ("✍️ Задайте помощнику свой вопрос.", "✍️ Задать вопрос", "ch_qa"),
-    "life": ("👼 Узнайте о святом и своём дне ангела.", "👼 Найти святого", "ch_life"),
-    "film": ("📚 Откройте православную библиотеку.", "📚 Открыть библиотеку", "ch_film"),
-    "gospel": ("📖 Откройте Евангельская мысль.", "📖 Евангельская мысль", "ch_gospel"),
-    "photo": ("📸 Отправьте фото иконы помощнику.", "📸 Узнать икону", "ch_photo"),
-    "church": ("🗺️ Найдите ближайший храм.", "🗺️ Найти храм", "ch_church"),
-    "showcase_prayer": ("🙏 Выберите молитву по своей ситуации.", "🙏 Выбрать молитву", "ch_showcase_prayer"),
-    "showcase_photo": ("📸 Отправьте фото иконы для определения образа.", "📸 Определить икону", "ch_showcase_photo"),
-    "showcase_angel": ("👼 Найдите возможные дни памяти покровителя.", "👼 Узнать день ангела", "ch_showcase_angel"),
-    "showcase_confession": ("📿 Откройте спокойную подготовку к исповеди.", "📿 Подготовиться", "ch_showcase_confession"),
-    "interactive": ("💬 Выберите тему следующей полезной публикации.", "💬 Выбрать тему", "ch_interactive"),
-    "community": ("❓ Есть похожая ситуация? Задайте свой вопрос помощнику.", "❓ Задать свой вопрос", "ch_community"),
+    "morning": ("🙏 Получите молитву дня — сразу, без поиска по меню.", "🙏 Получить молитву на сегодня", "ch_morning"),
+    "quote": ("❓ Разберите именно свою ситуацию с помощником.", "❓ Разобрать мою ситуацию", "ch_quote"),
+    "saint": ("👼 Найдите своего святого по имени.", "👼 Найти моего покровителя", "ch_saint"),
+    "guidance": ("🕊️ Получите бережный ответ по вашей ситуации.", "🕊️ Получить бережный ответ", "ch_guidance"),
+    "practical": ("⛪ Перейдите сразу к спокойной подготовке к исповеди.", "📿 Подготовиться к исповеди", "ch_practical"),
+    "story": ("👼 Найдите святого по имени и возможные дни памяти.", "👼 Найти святого по имени", "ch_story"),
+    "evening": ("🌙 Откройте вечернюю молитву — сразу в боте.", "🌙 Получить молитву перед сном", "ch_evening"),
+    "qa": ("✍️ Задайте свой вопрос и выберите глубину ответа.", "✍️ Задать свой вопрос", "ch_qa"),
+    "life": ("👼 Найдите небесного покровителя и молитву к нему.", "👼 Узнать моего покровителя", "ch_life"),
+    "film": ("📚 Откройте подборку православных материалов.", "📚 Выбрать материал для чтения", "ch_film"),
+    "gospel": ("📖 Прочитайте сегодняшнюю евангельскую мысль.", "📖 Прочитать мысль на сегодня", "ch_gospel"),
+    "photo": ("📸 Отправьте фотографию иконы для предварительного определения.", "📸 Определить икону по фото", "ch_photo"),
+    "church": ("🗺️ Перейдите сразу к поиску ближайшего храма.", "🗺️ Найти храм рядом", "ch_church"),
+    "showcase_prayer": ("🙏 Получите молитву по вашей личной просьбе.", "🙏 Подобрать молитву по ситуации", "ch_showcase_prayer"),
+    "showcase_photo": ("📸 Отправьте фото иконы для предварительного определения.", "📸 Узнать, что за икона", "ch_showcase_photo"),
+    "showcase_angel": ("👼 Найдите святого по своему имени.", "👼 Узнать моего покровителя", "ch_showcase_angel"),
+    "showcase_confession": ("📿 Откройте бережную памятку к первой исповеди.", "📿 Подготовиться спокойно", "ch_showcase_confession"),
+    "interactive": ("💬 Выберите тему следующей полезной публикации.", "💬 Выбрать следующую тему", "ch_interactive"),
+    "community": ("❓ Расскажите о похожей ситуации и получите личный ответ.", "❓ Разобрать похожую ситуацию", "ch_community"),
 }
 
 CHANNEL_CTA_B_LABELS = {
     "morning": "🙏 Начать день с молитвы",
-    "quote": "❓ Разобрать свою ситуацию",
-    "saint": "👼 Узнать своего покровителя",
-    "guidance": "🕊️ Получить бережный ответ",
-    "practical": "⛪ Посмотреть пошагово",
-    "story": "👼 Найти святого по имени",
+    "quote": "❓ Получить ответ на мой вопрос",
+    "saint": "👼 Узнать день ангела",
+    "guidance": "🕊️ Разобрать, что меня тревожит",
+    "practical": "📿 Открыть памятку к исповеди",
+    "story": "👼 Найти небесного покровителя",
     "evening": "🌙 Завершить день с молитвой",
-    "qa": "✍️ Спросить помощника",
-    "life": "📖 Узнать больше о святом",
-    "film": "📚 Выбрать материал",
-    "gospel": "📖 Прочитать сегодня",
+    "qa": "✍️ Спросить православного помощника",
+    "life": "🙏 Получить молитву покровителю",
+    "film": "📚 Открыть полезную подборку",
+    "gospel": "📖 Прочитать и применить сегодня",
     "photo": "📸 Отправить фото иконы",
-    "church": "🗺️ Найти храм рядом",
-    "showcase_prayer": "🙏 Найти свою молитву",
+    "church": "🗺️ Найти ближайший храм",
+    "showcase_prayer": "🙏 Получить молитву для меня",
     "showcase_photo": "📸 Определить образ",
-    "showcase_confession": "📿 Подготовиться спокойно",
-    "interactive": "💬 Выбрать следующую тему",
+    "showcase_confession": "📿 Подготовиться без страха",
+    "interactive": "💬 Выбрать тему канала",
 }
+
+
 
 
 def save_post_source(post_key: str, source: str, variant: str):
@@ -4043,90 +4055,136 @@ def special_slots(msk_now: datetime):
 
 
 
+
+CHANNEL_FAILSAFE_DAILY_LIMIT = 5
+CHANNEL_FAILSAFE_COOLDOWN_MINUTES = 20
+
+
+def _channel_alert_once_per_day(key: str) -> bool:
+    day_key = datetime.utcnow().strftime("%Y-%m-%d")
+    setting_key = f"channel_alert_{key}_{day_key}"
+    if get_app_setting(setting_key, ""):
+        return False
+    set_app_setting(setting_key, "1")
+    return True
+
+
+def acquire_channel_publish_guard(post_key: str, post_date: str, slot: str, rubric: str) -> tuple[bool, str]:
+    """Atomic fail-safe guard. Any first attempt permanently locks the slot."""
+    conn = db_connect()
+    try:
+        conn.execute("BEGIN IMMEDIATE")
+        existing = conn.execute("SELECT status FROM channel_posts WHERE post_key=?", (post_key,)).fetchone()
+        if existing:
+            conn.rollback()
+            return False, f"slot_locked:{existing[0]}"
+        day_count = conn.execute(
+            "SELECT COUNT(*) FROM channel_posts WHERE post_date=? AND status IN ('reserved','sending','sent','uncertain_locked','failed_locked')",
+            (post_date,),
+        ).fetchone()[0]
+        if int(day_count or 0) >= CHANNEL_FAILSAFE_DAILY_LIMIT:
+            conn.rollback()
+            return False, "daily_limit"
+        latest = conn.execute(
+            "SELECT created_at FROM channel_posts WHERE status IN ('reserved','sending','sent','uncertain_locked','failed_locked') ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if latest and latest[0]:
+            try:
+                age = (datetime.now() - datetime.fromisoformat(latest[0])).total_seconds()
+                if age < CHANNEL_FAILSAFE_COOLDOWN_MINUTES * 60:
+                    conn.rollback()
+                    return False, "cooldown"
+            except Exception:
+                pass
+        conn.execute(
+            """INSERT INTO channel_posts(post_key,post_date,slot,rubric,topic,content,status,created_at,message_id)
+               VALUES (?,?,?,?,?,'','reserved',?,'')""",
+            (post_key, post_date, slot, rubric, "", datetime.now().isoformat()),
+        )
+        conn.commit()
+        return True, "reserved"
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
+
+
+def finalize_channel_publish_guard(post_key: str, status: str, topic: str = "", content: str = "", message_id: str = "") -> None:
+    """Final states are permanent and are never retried automatically."""
+    conn = db_connect()
+    try:
+        conn.execute(
+            "UPDATE channel_posts SET status=?,topic=?,content=?,message_id=? WHERE post_key=?",
+            (status, (topic or "")[:250], (content or "")[:4000], str(message_id or ""), post_key),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+
 CHANNEL_PUBLISH_LOCK = asyncio.Lock()
 
 
+
 async def publish_channel_slot(msk_now: datetime, hour: int, rubric: str, cta_key: str, prompt: str):
-    """Публикует один слот и фиксирует успех только после подтверждения MAX."""
+    """Exactly one network attempt per slot. No fallback and no automatic retry."""
     async with CHANNEL_PUBLISH_LOCK:
         date_key = msk_now.strftime("%Y-%m-%d")
         post_key = f"{date_key}_{hour:02d}_{rubric}"
-        if channel_post_exists(post_key):
+        acquired, reason = acquire_channel_publish_guard(post_key, date_key, f"{hour:02d}:00", rubric)
+        if not acquired:
+            logging.warning(f"Канал MAX: публикация заблокирована защитой ({reason}) — {post_key}")
             return False
-        if prompt == "__DYNAMIC_SAINT__":
-            prompt = dynamic_saint_prompt(msk_now)
-        visual = select_channel_visual(msk_now, hour, cta_key, rubric)
-        variant = "b" if (int(msk_now.strftime("%Y%m%d")) + int(hour)) % 2 else "a"
-        source = make_post_source("m", msk_now, hour, cta_key, variant)
-        record_post_experiment(source, "MAX", post_key, cta_key, variant)
-        text, buttons, deep_link, topic = await generate_channel_post(
-            prompt, cta_key, rubric,
-            visual_prompt_note=visual.get("prompt_note", "") if visual else "",
-            visual_title=visual.get("title", "") if visual else "",
-            source_override=source,
-        )
-        photo_urls = visual.get("urls") if visual else None
-        prefer_generated = bool(visual) and not (hour == 9 or cta_key in {"saint", "life", "story", "showcase_photo"})
-        generation_prompt = build_channel_image_prompt(hour, cta_key, rubric) if visual else ""
-        cache_key = f"shared:{date_key}:{hour}:{rubric}:{cta_key}"
-        # Резервируем слот до сетевого запроса: даже при нестандартном ответе API
-        # параллельный цикл не сможет отправить тот же пост повторно.
-        save_channel_post(
-            post_key, date_key, f"{hour:02d}:00", rubric,
-            topic, text, "sending", message_id=""
-        )
-        save_post_source(post_key, source, variant)
-        message_id = ""
+        source = ""
         try:
-            message_id = await asyncio.wait_for(
-                post_to_channel(
-                    text, photo_urls, buttons, deep_link,
-                    generation_prompt=generation_prompt,
-                    cache_key=cache_key,
-                    prefer_generated=prefer_generated,
-                    visual_title=visual.get("title", "") if visual else "",
-                    show_visual_title=bool(visual) and not prefer_generated,
-                ),
-                timeout=CHANNEL_POST_TIMEOUT_SECONDS,
+            if prompt == "__DYNAMIC_SAINT__":
+                prompt = dynamic_saint_prompt(msk_now)
+            variant = "b" if (int(msk_now.strftime("%Y%m%d")) + int(hour)) % 2 else "a"
+            source = make_post_source("m", msk_now, hour, cta_key, variant)
+            record_post_experiment(source, "MAX", post_key, cta_key, variant)
+            text, buttons, deep_link, topic = await generate_channel_post(
+                prompt, cta_key, rubric, visual_prompt_note="", visual_title="", source_override=source,
             )
-        except asyncio.TimeoutError:
-            logging.error(
-                f"Канал MAX: публикация {hour:02d}:00 превысила {CHANNEL_POST_TIMEOUT_SECONDS:.0f} секунд; "
-                "отправляю текстовый fallback"
-            )
-            payload = {"text": clean_channel_markup(text)[:4000]}
-            if buttons:
-                payload["attachments"] = [{"type": "inline_keyboard", "payload": {"buttons": buttons}}]
+            save_post_source(post_key, source, variant)
+            finalize_channel_publish_guard(post_key, "sending", topic, text, "")
             try:
-                fallback_result = await max_request(
-                    "POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload
+                message_id = await asyncio.wait_for(
+                    post_to_channel(text, None, buttons, deep_link),
+                    timeout=CHANNEL_POST_TIMEOUT_SECONDS,
                 )
-                if _max_response_ok(fallback_result):
-                    message_id = _extract_message_id(fallback_result) or f"confirmed_{int(datetime.now().timestamp())}"
-            except Exception as fallback_error:
-                logging.error(f"Канал MAX: аварийный текстовый fallback не отправлен: {fallback_error}")
-        ok = bool(message_id)
-        save_channel_post(
-            post_key, date_key, f"{hour:02d}:00", rubric,
-            topic, text, "sent" if ok else "failed", message_id=message_id
-        )
-        save_post_source(post_key, source, variant)
-        if ok:
-            set_app_setting("max_last_channel_failure", "")
-            track_funnel_event(OWNER_ID, "MAX", "channel_post_published", source=source, target=cta_key, value=post_key, metadata=rubric)
-            logging.info(f"Канал: успешно опубликовано — {rubric}")
-            if hour == 7:
-                asyncio.create_task(morning_broadcast_max())
-        else:
-            set_app_setting(
-                "max_last_channel_failure",
-                f"{datetime.now().isoformat()} | {hour:02d}:00 | {rubric}"
-            )
-            logging.error(
-                f"Канал: публикация не прошла — {rubric}; "
-                "будет автоматически повторена"
-            )
-        return ok
+            except asyncio.TimeoutError:
+                finalize_channel_publish_guard(post_key, "uncertain_locked", topic, text, "")
+                set_app_setting("max_last_channel_failure", f"{datetime.now().isoformat()} | uncertain | {post_key}")
+                logging.error(f"Канал MAX: таймаут публикации; слот навсегда заблокирован без повтора — {post_key}")
+                if _channel_alert_once_per_day("max_uncertain"):
+                    await send_message(OWNER_ID, "⚠️ MAX: результат одной публикации не подтверждён. Автоповтор отключён, слот заблокирован. Проверьте канал вручную.")
+                return False
+            if message_id:
+                finalize_channel_publish_guard(post_key, "sent", topic, text, message_id)
+                set_app_setting("max_last_channel_failure", "")
+                track_funnel_event(OWNER_ID, "MAX", "channel_post_published", source=source, target=cta_key, value=post_key, metadata=rubric)
+                logging.info(f"Канал MAX: опубликовано один раз — {rubric}")
+                if hour == 7:
+                    asyncio.create_task(morning_broadcast_max())
+                return True
+            finalize_channel_publish_guard(post_key, "uncertain_locked", topic, text, "")
+            set_app_setting("max_last_channel_failure", f"{datetime.now().isoformat()} | no_confirmation | {post_key}")
+            logging.error(f"Канал MAX: нет подтверждения API; слот заблокирован без повтора — {post_key}")
+            if _channel_alert_once_per_day("max_no_confirmation"):
+                await send_message(OWNER_ID, "⚠️ MAX не подтвердил публикацию. Повтор автоматически не выполняется, чтобы исключить спам.")
+            return False
+        except Exception as e:
+            finalize_channel_publish_guard(post_key, "failed_locked", "", str(e), "")
+            set_app_setting("max_last_channel_failure", f"{datetime.now().isoformat()} | failed_locked | {post_key} | {str(e)[:300]}")
+            logging.exception(f"Канал MAX: ошибка до/во время единственной попытки; слот заблокирован — {post_key}")
+            if _channel_alert_once_per_day("max_publish_error"):
+                try:
+                    await send_message(OWNER_ID, f"⚠️ MAX: публикация остановлена защитой. Автоповтора нет. Ошибка: {str(e)[:500]}")
+                except Exception:
+                    pass
+            return False
+
 
 
 def channel_posts_today(msk_now: datetime):
@@ -4324,68 +4382,33 @@ async def check_donation_payments_loop_max():
 
 
 
+
 async def channel_scheduler():
-    """Автопостинг MAX по МСК с постоянным восстановлением пропусков."""
+    """Fail-safe scheduler: exact slots only, no catch-up and no retry."""
     await asyncio.sleep(15)
-    last_error_notice = None
-    last_recovery_window = ""
-
-    try:
-        startup_msk = datetime.utcnow() + timedelta(hours=3)
-        await publish_latest_missed_slot(startup_msk)
-    except Exception as e:
-        logging.exception(f"Канал: ошибка восстановления после запуска: {e}")
-        set_app_setting(
-            "max_last_channel_failure",
-            f"{datetime.now().isoformat()} | startup | {str(e)[:500]}"
-        )
-        try:
-            await send_message(
-                OWNER_ID,
-                "⚠️ Канал MAX не смог восстановить публикацию после запуска.\n\n"
-                f"Ошибка: {str(e)[:700]}"
-            )
-        except Exception:
-            pass
-
+    processed_windows = set()
     while True:
         try:
             msk_now = datetime.utcnow() + timedelta(hours=3)
             set_app_setting("max_channel_scheduler_heartbeat", msk_now.isoformat())
-            slots = build_daily_slots(msk_now) + special_slots(msk_now)
-            for hour, rubric, cta_key, prompt in slots:
-                if msk_now.hour == hour and msk_now.minute < 30:
-                    await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
-                    await asyncio.sleep(3)
-
-            recovery_window = f"{msk_now:%Y-%m-%d-%H}-{msk_now.minute // 5}"
-            if recovery_window != last_recovery_window:
-                last_recovery_window = recovery_window
-                slot = select_catchup_channel_slot(msk_now)
-                if slot is not None:
-                    hour, rubric, cta_key, prompt = slot
-                    logging.warning(
-                        f"Канал MAX: автоматическое восстановление {hour:02d}:00 — {rubric}"
-                    )
-                    await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
+            window = f"{msk_now:%Y-%m-%d-%H}"
+            if window not in processed_windows and msk_now.minute < 10:
+                processed_windows.add(window)
+                processed_windows = {x for x in processed_windows if x.startswith(msk_now.strftime("%Y-%m-%d"))}
+                for hour, rubric, cta_key, prompt in build_daily_slots(msk_now) + special_slots(msk_now):
+                    if msk_now.hour == hour:
+                        await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
+                        break
         except Exception as e:
-            logging.exception(f"Канал: ошибка планировщика: {e}")
-            set_app_setting(
-                "max_last_channel_failure",
-                f"{datetime.now().isoformat()} | scheduler | {str(e)[:500]}"
-            )
-            now = datetime.utcnow()
-            if last_error_notice is None or now - last_error_notice >= timedelta(hours=1):
-                last_error_notice = now
+            logging.exception(f"Канал MAX: ошибка планировщика: {e}")
+            set_app_setting("max_last_channel_failure", f"{datetime.now().isoformat()} | scheduler | {str(e)[:500]}")
+            if _channel_alert_once_per_day("max_scheduler"):
                 try:
-                    await send_message(
-                        OWNER_ID,
-                        "⚠️ Ошибка автопостинга в MAX-канал.\n\n"
-                        f"{str(e)[:700]}"
-                    )
+                    await send_message(OWNER_ID, f"⚠️ Планировщик MAX остановил текущий слот без повтора. Ошибка: {str(e)[:500]}")
                 except Exception:
                     pass
         await asyncio.sleep(30)
+
 
 
 
@@ -4408,8 +4431,9 @@ async def channel_scheduler_supervisor():
         await asyncio.sleep(10)
 
 
+
 async def channel_watchdog_loop():
-    """Проверяет heartbeat и через 10 минут восстанавливает актуальный пропуск."""
+    """Read-only watchdog. It never publishes channel posts."""
     await asyncio.sleep(90)
     while True:
         try:
@@ -4420,37 +4444,18 @@ async def channel_watchdog_loop():
                     age = (msk_now - datetime.fromisoformat(heartbeat)).total_seconds()
                 except Exception:
                     age = 0
-                if age > 240:
-                    alert_key = f"max_scheduler_stale_{msk_now:%Y%m%d%H}"
-                    if not get_app_setting(alert_key, ""):
-                        set_app_setting(alert_key, "1")
-                        try:
-                            await send_message(OWNER_ID, f"⚠️ Нет пульса планировщика MAX уже {int(age)} секунд. Запущено автоматическое восстановление.")
-                        except Exception:
-                            pass
-            slot = select_catchup_channel_slot(msk_now)
-            if slot is not None:
-                hour, rubric, cta_key, prompt = slot
-                slot_time = msk_now.replace(hour=hour, minute=0, second=0, microsecond=0)
-                if (msk_now - slot_time).total_seconds() >= 600:
-                    ok = await publish_channel_slot(msk_now, hour, rubric, cta_key, prompt)
-                    if not ok:
-                        alert_key = f"max_missed_alert_{msk_now:%Y%m%d}_{hour:02d}_{rubric}"
-                        if not get_app_setting(alert_key, ""):
-                            set_app_setting(alert_key, "1")
-                            try:
-                                await send_message(OWNER_ID, f"⚠️ Не удалось выпустить пост MAX {hour:02d}:00 — {rubric}. Проверьте /channel_status.")
-                            except Exception:
-                                pass
+                if age > 300 and _channel_alert_once_per_day("max_stale"):
+                    await send_message(OWNER_ID, f"⚠️ Нет пульса планировщика MAX уже {int(age)} секунд. Watchdog ничего не публикует автоматически.")
         except asyncio.CancelledError:
             raise
         except Exception as e:
-            logging.exception(f"Канал MAX: ошибка watchdog: {e}")
-        await asyncio.sleep(120)
+            logging.exception(f"Канал MAX: ошибка read-only watchdog: {e}")
+        await asyncio.sleep(300)
+
 
 
 # ========== FASTAPI / LIFECYCLE ==========
-app = FastAPI(title="С верой — MAX", version="5.0.1")
+app = FastAPI(title="С верой — MAX", version="5.0.2")
 BACKGROUND_TASKS = set()
 
 
