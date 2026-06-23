@@ -1233,13 +1233,101 @@ def track_funnel_event(user_id: int, platform: str, event_name: str, source: str
         logging.error(f"Funnel event error: {e}")
 
 
+
+
+def _source_base(source: str) -> str:
+    """Нормализует уникальную метку поста до базовой рубрики."""
+    return (source or "").split("__", 1)[0]
+
+
+def resolve_funnel_source(user_id: int, platform: str, max_age_days: int = 30) -> str:
+    """Возвращает последнюю достоверную метку канала для последующей конверсии."""
+    try:
+        conn = db_connect()
+        row = conn.execute(
+            """SELECT last_source,last_source_at,first_source
+               FROM user_funnel_state WHERE user_id=? AND platform=?""",
+            (int(user_id), platform),
+        ).fetchone()
+        conn.close()
+        if not row:
+            return ""
+        last_source, last_source_at, first_source = row
+        if last_source and last_source_at:
+            try:
+                age = datetime.now() - datetime.fromisoformat(last_source_at)
+                if age.total_seconds() <= max_age_days * 86400:
+                    return str(last_source)
+            except Exception:
+                pass
+        return str(first_source or "")
+    except Exception as e:
+        logging.error(f"Funnel attribution read error: {e}")
+        return ""
+
+
+def track_attributed_event(
+    user_id: int,
+    platform: str,
+    event_name: str,
+    target: str = "",
+    value: str = "",
+    metadata: str = "",
+) -> None:
+    source = resolve_funnel_source(user_id, platform)
+    track_funnel_event(
+        user_id, platform, event_name,
+        source=source, target=target, value=value, metadata=metadata,
+    )
+
+
+def funnel_source_report_text(platform: str, days: int = 30) -> str:
+    """Сквозной отчёт по источникам: клик → активация → возврат → отзыв → пожертвование."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    try:
+        conn = db_connect()
+        rows = conn.execute(
+            """SELECT
+                   CASE WHEN instr(source,'__')>0 THEN substr(source,1,instr(source,'__')-1) ELSE source END AS src,
+                   COUNT(DISTINCT CASE WHEN event_name='channel_click' THEN user_id END) AS clicks,
+                   COUNT(DISTINCT CASE WHEN event_name='activated' THEN user_id END) AS activated,
+                   COUNT(DISTINCT CASE WHEN event_name='return_d7' THEN user_id END) AS returned_d7,
+                   COUNT(DISTINCT CASE WHEN event_name='review_submitted' THEN user_id END) AS reviews,
+                   COUNT(DISTINCT CASE WHEN event_name='donation_succeeded' THEN user_id END) AS donors,
+                   COALESCE(SUM(CASE WHEN event_name='donation_succeeded' THEN CAST(value AS INTEGER) ELSE 0 END),0) AS revenue
+               FROM funnel_events
+               WHERE platform=? AND created_at>=? AND COALESCE(source,'')<>''
+               GROUP BY src
+               ORDER BY activated DESC, clicks DESC
+               LIMIT 20""",
+            (platform, cutoff),
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return f"📊 Источники воронки — {platform}, {days} дней\n\nДанных пока недостаточно."
+        lines = [f"📊 Источники воронки — {platform}, {days} дней", ""]
+        for src, clicks, activated, returned_d7, reviews, donors, revenue in rows:
+            clicks = int(clicks or 0); activated = int(activated or 0)
+            rate = activated / clicks * 100 if clicks else 0
+            lines.append(
+                f"• {src}: {clicks} → {activated} ({rate:.1f}%) | "
+                f"D7 {int(returned_d7 or 0)} | отзывы {int(reviews or 0)} | "
+                f"доноры {int(donors or 0)} / {int(revenue or 0)} ₽"
+            )
+        lines += ["", "Путь: уникальный переход → первое полезное действие → D7 → отзыв → пожертвование."]
+        return "\n".join(lines)
+    except Exception as e:
+        logging.error(f"Funnel source report error: {e}")
+        return f"⚠️ Не удалось построить сквозной отчёт: {e}"
+
+
 def touch_funnel_user(user_id: int, platform: str, source: str = "", target: str = "", increment_visit: bool = True):
     now = datetime.now()
     referral_code = f"ref_{int(user_id)}"
     try:
         touch_user_session(user_id, platform, source, target)
         conn = db_connect()
-        row = conn.execute("SELECT visit_count,first_source,first_target,first_seen_at FROM user_funnel_state WHERE user_id=? AND platform=?", (int(user_id), platform)).fetchone()
+        row = conn.execute("SELECT visit_count,first_source,first_target,first_seen_at,last_source,last_target FROM user_funnel_state WHERE user_id=? AND platform=?", (int(user_id), platform)).fetchone()
         if row:
             conn.execute(
                 """UPDATE user_funnel_state SET last_seen_at=?,visit_count=visit_count+?,
@@ -1256,7 +1344,7 @@ def touch_funnel_user(user_id: int, platform: str, source: str = "", target: str
                         event_name = f"return_d{threshold}"
                         exists = conn.execute("SELECT 1 FROM funnel_events WHERE user_id=? AND platform=? AND event_name=? LIMIT 1", (int(user_id), platform, event_name)).fetchone()
                         if not exists:
-                            conn.execute("INSERT INTO funnel_events(user_id,platform,event_name,created_at) VALUES (?,?,?,?)", (int(user_id), platform, event_name, now.isoformat()))
+                            conn.execute("INSERT INTO funnel_events(user_id,platform,event_name,source,target,created_at) VALUES (?,?,?,?,?,?)", (int(user_id), platform, event_name, (source or (row[4] if len(row) > 4 else row[1]) or ""), (target or (row[5] if len(row) > 5 else row[2]) or ""), now.isoformat()))
         else:
             conn.execute(
                 """INSERT INTO user_funnel_state(user_id,platform,first_source,first_target,first_seen_at,last_seen_at,visit_count,referral_code,last_source,last_target,last_source_at)
@@ -2897,6 +2985,9 @@ async def handle_text(chat_id, user_id, text, first_name=""):
     if int(user_id) == int(OWNER_ID) and owner_command in {"/funnel_report", "воронка"}:
         await send_message(chat_id, funnel_report_text("MAX", 7))
         return
+    if int(user_id) == int(OWNER_ID) and owner_command in {"/funnel_sources", "источники воронки"}:
+        await send_message(chat_id, funnel_source_report_text("MAX", 30))
+        return
     if int(user_id) == int(OWNER_ID) and owner_command in {
         "/channel_status", "канал статус"
     }:
@@ -3265,6 +3356,7 @@ async def handle_text(chat_id, user_id, text, first_name=""):
             [[btn("✅ Да, анонимно", "review_consent:yes")], [btn("Нет", "review_consent:no")], [btn("🏠 Меню", "main_menu")]]
         )
         set_funnel_flag(user_id, "MAX", "review_left", 1)
+        track_attributed_event(user_id, "MAX", "review_submitted", target="review", value=str(review_id))
         return
 
     if step == "donate_amount":
@@ -3542,13 +3634,24 @@ def get_channel_cta(cta_key: str, source_override: str = ""):
 
 
 def channel_post_exists(post_key: str) -> bool:
+    """Не допускает повторную отправку уже подтверждённого или выполняющегося слота."""
     conn = db_connect()
     row = conn.execute(
-        "SELECT status,COALESCE(message_id,'') FROM channel_posts WHERE post_key=?",
+        "SELECT status,COALESCE(message_id,''),created_at FROM channel_posts WHERE post_key=?",
         (post_key,),
     ).fetchone()
     conn.close()
-    return bool(row and row[0] == "sent" and str(row[1]).strip())
+    if not row:
+        return False
+    status, message_id, created_at = row
+    if status == "sent":
+        return True
+    if status == "sending" and created_at:
+        try:
+            return (datetime.now() - datetime.fromisoformat(created_at)).total_seconds() < 900
+        except Exception:
+            return True
+    return False
 
 
 def save_channel_post(post_key: str, post_date: str, slot: str, rubric: str, topic: str, content: str, status: str, message_id: str = ""):
@@ -3602,6 +3705,33 @@ def _extract_upload_token(payload):
     return ""
 
 
+def _extract_message_id(payload):
+    """Безопасно извлекает ID сообщения из разных форматов ответа MAX."""
+    if payload is None:
+        return ""
+    if isinstance(payload, dict):
+        for key in ("message_id", "mid", "id"):
+            value = payload.get(key)
+            if value not in (None, "") and not isinstance(value, (dict, list)):
+                return str(value)
+        for key in ("message", "body", "data", "result", "payload"):
+            if key in payload:
+                found = _extract_message_id(payload.get(key))
+                if found:
+                    return found
+        for value in payload.values():
+            if isinstance(value, (dict, list)):
+                found = _extract_message_id(value)
+                if found:
+                    return found
+    elif isinstance(payload, list):
+        for item in payload:
+            found = _extract_message_id(item)
+            if found:
+                return found
+    return ""
+
+
 def _max_response_ok(payload):
     if not isinstance(payload, dict) or not payload:
         return False
@@ -3631,9 +3761,11 @@ async def post_to_channel(
         payload["attachments"] = [{"type": "inline_keyboard", "payload": {"buttons": buttons}}]
     try:
         result = await max_request("POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload)
-        message_id = _extract_message_id(result) if _max_response_ok(result) else ""
-        if message_id:
-            logging.info(f"Канал MAX: текст+CTA отправлены, message_id={message_id}")
+        if not _max_response_ok(result):
+            logging.error(f"Канал MAX: API не подтвердил публикацию: {result}")
+            return ""
+        message_id = _extract_message_id(result) or f"confirmed_{int(datetime.now().timestamp())}"
+        logging.info(f"Канал MAX: текст+CTA отправлены, message_id={message_id}")
         return message_id
     except Exception as e:
         logging.error(f"Канал MAX: публикация не удалась: {e}")
@@ -3937,6 +4069,13 @@ async def publish_channel_slot(msk_now: datetime, hour: int, rubric: str, cta_ke
         prefer_generated = bool(visual) and not (hour == 9 or cta_key in {"saint", "life", "story", "showcase_photo"})
         generation_prompt = build_channel_image_prompt(hour, cta_key, rubric) if visual else ""
         cache_key = f"shared:{date_key}:{hour}:{rubric}:{cta_key}"
+        # Резервируем слот до сетевого запроса: даже при нестандартном ответе API
+        # параллельный цикл не сможет отправить тот же пост повторно.
+        save_channel_post(
+            post_key, date_key, f"{hour:02d}:00", rubric,
+            topic, text, "sending", message_id=""
+        )
+        save_post_source(post_key, source, variant)
         message_id = ""
         try:
             message_id = await asyncio.wait_for(
@@ -3963,7 +4102,7 @@ async def publish_channel_slot(msk_now: datetime, hour: int, rubric: str, cta_ke
                     "POST", f"messages?chat_id={MAX_CHANNEL_ID}", payload
                 )
                 if _max_response_ok(fallback_result):
-                    message_id = _extract_message_id(fallback_result)
+                    message_id = _extract_message_id(fallback_result) or f"confirmed_{int(datetime.now().timestamp())}"
             except Exception as fallback_error:
                 logging.error(f"Канал MAX: аварийный текстовый fallback не отправлен: {fallback_error}")
         ok = bool(message_id)
@@ -3974,6 +4113,7 @@ async def publish_channel_slot(msk_now: datetime, hour: int, rubric: str, cta_ke
         save_post_source(post_key, source, variant)
         if ok:
             set_app_setting("max_last_channel_failure", "")
+            track_funnel_event(OWNER_ID, "MAX", "channel_post_published", source=source, target=cta_key, value=post_key, metadata=rubric)
             logging.info(f"Канал: успешно опубликовано — {rubric}")
             if hour == 7:
                 asyncio.create_task(morning_broadcast_max())
@@ -4166,7 +4306,7 @@ async def check_donation_payments_loop_max():
                         if remote != "succeeded":
                             _mark_donation_field(payment_id, "status", remote if remote in {"pending","waiting_for_capture"} else "pending"); continue
                         _mark_donation_field(payment_id, "status", "succeeded"); _mark_donation_field(payment_id, "paid_at", now.isoformat())
-                        set_funnel_flag(user_id, "MAX", "donation_made", 1); track_funnel_event(user_id, "MAX", "donation_succeeded", value=str(amount))
+                        set_funnel_flag(user_id, "MAX", "donation_made", 1); track_attributed_event(user_id, "MAX", "donation_succeeded", target="donate", value=str(amount))
                     if not user_n:
                         result = await send_message(chat_id, f"🕯️ Пожертвование {amount} рублей прошло успешно.\n\nБлагодарим за поддержку проекта «С верой». Да хранит вас Господь!", main_menu_buttons())
                         if _max_response_ok(result): _mark_donation_field(payment_id, "user_notified", 1)
@@ -4310,7 +4450,7 @@ async def channel_watchdog_loop():
 
 
 # ========== FASTAPI / LIFECYCLE ==========
-app = FastAPI(title="С верой — MAX", version="4.3.1")
+app = FastAPI(title="С верой — MAX", version="5.0.1")
 BACKGROUND_TASKS = set()
 
 

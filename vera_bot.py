@@ -749,18 +749,106 @@ def track_funnel_event(user_id: int, platform: str, event_name: str, source: str
         logging.error(f"Funnel event error: {e}")
 
 
+
+
+def _source_base(source: str) -> str:
+    """Нормализует уникальную метку поста до базовой рубрики."""
+    return (source or "").split("__", 1)[0]
+
+
+def resolve_funnel_source(user_id: int, platform: str, max_age_days: int = 30) -> str:
+    """Возвращает последнюю достоверную метку канала для последующей конверсии."""
+    try:
+        conn = db_connect()
+        row = conn.execute(
+            """SELECT last_source,last_source_at,first_source
+               FROM user_funnel_state WHERE user_id=? AND platform=?""",
+            (int(user_id), platform),
+        ).fetchone()
+        conn.close()
+        if not row:
+            return ""
+        last_source, last_source_at, first_source = row
+        if last_source and last_source_at:
+            try:
+                age = datetime.now() - datetime.fromisoformat(last_source_at)
+                if age.total_seconds() <= max_age_days * 86400:
+                    return str(last_source)
+            except Exception:
+                pass
+        return str(first_source or "")
+    except Exception as e:
+        logging.error(f"Funnel attribution read error: {e}")
+        return ""
+
+
+def track_attributed_event(
+    user_id: int,
+    platform: str,
+    event_name: str,
+    target: str = "",
+    value: str = "",
+    metadata: str = "",
+) -> None:
+    source = resolve_funnel_source(user_id, platform)
+    track_funnel_event(
+        user_id, platform, event_name,
+        source=source, target=target, value=value, metadata=metadata,
+    )
+
+
+def funnel_source_report_text(platform: str, days: int = 30) -> str:
+    """Сквозной отчёт по источникам: клик → активация → возврат → отзыв → пожертвование."""
+    cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+    try:
+        conn = db_connect()
+        rows = conn.execute(
+            """SELECT
+                   CASE WHEN instr(source,'__')>0 THEN substr(source,1,instr(source,'__')-1) ELSE source END AS src,
+                   COUNT(DISTINCT CASE WHEN event_name='channel_click' THEN user_id END) AS clicks,
+                   COUNT(DISTINCT CASE WHEN event_name='activated' THEN user_id END) AS activated,
+                   COUNT(DISTINCT CASE WHEN event_name='return_d7' THEN user_id END) AS returned_d7,
+                   COUNT(DISTINCT CASE WHEN event_name='review_submitted' THEN user_id END) AS reviews,
+                   COUNT(DISTINCT CASE WHEN event_name='donation_succeeded' THEN user_id END) AS donors,
+                   COALESCE(SUM(CASE WHEN event_name='donation_succeeded' THEN CAST(value AS INTEGER) ELSE 0 END),0) AS revenue
+               FROM funnel_events
+               WHERE platform=? AND created_at>=? AND COALESCE(source,'')<>''
+               GROUP BY src
+               ORDER BY activated DESC, clicks DESC
+               LIMIT 20""",
+            (platform, cutoff),
+        ).fetchall()
+        conn.close()
+        if not rows:
+            return f"📊 Источники воронки — {platform}, {days} дней\n\nДанных пока недостаточно."
+        lines = [f"📊 Источники воронки — {platform}, {days} дней", ""]
+        for src, clicks, activated, returned_d7, reviews, donors, revenue in rows:
+            clicks = int(clicks or 0); activated = int(activated or 0)
+            rate = activated / clicks * 100 if clicks else 0
+            lines.append(
+                f"• {src}: {clicks} → {activated} ({rate:.1f}%) | "
+                f"D7 {int(returned_d7 or 0)} | отзывы {int(reviews or 0)} | "
+                f"доноры {int(donors or 0)} / {int(revenue or 0)} ₽"
+            )
+        lines += ["", "Путь: уникальный переход → первое полезное действие → D7 → отзыв → пожертвование."]
+        return "\n".join(lines)
+    except Exception as e:
+        logging.error(f"Funnel source report error: {e}")
+        return f"⚠️ Не удалось построить сквозной отчёт: {e}"
+
+
 def touch_funnel_user(user_id: int, platform: str, source: str = "", target: str = "", increment_visit: bool = True):
     now = datetime.now(); referral_code = f"ref_{int(user_id)}"
     try:
         touch_user_session(user_id, platform, source, target)
-        conn = db_connect(); row = conn.execute("SELECT visit_count,first_source,first_target,first_seen_at FROM user_funnel_state WHERE user_id=? AND platform=?", (int(user_id), platform)).fetchone()
+        conn = db_connect(); row = conn.execute("SELECT visit_count,first_source,first_target,first_seen_at,last_source,last_target FROM user_funnel_state WHERE user_id=? AND platform=?", (int(user_id), platform)).fetchone()
         if row:
             conn.execute("""UPDATE user_funnel_state SET last_seen_at=?,visit_count=visit_count+?,last_source=CASE WHEN ?<>'' THEN ? ELSE last_source END,last_target=CASE WHEN ?<>'' THEN ? ELSE last_target END,last_source_at=CASE WHEN ?<>'' THEN ? ELSE last_source_at END WHERE user_id=? AND platform=?""", (now.isoformat(), 1 if increment_visit else 0, source, source, target, target, source, now.isoformat(), int(user_id), platform))
             if increment_visit and row[3]:
                 age_days = (now - datetime.fromisoformat(row[3])).days
                 for threshold in (1,3,7):
                     if age_days >= threshold and not conn.execute("SELECT 1 FROM funnel_events WHERE user_id=? AND platform=? AND event_name=? LIMIT 1", (int(user_id),platform,f"return_d{threshold}")).fetchone():
-                        conn.execute("INSERT INTO funnel_events(user_id,platform,event_name,created_at) VALUES (?,?,?,?)", (int(user_id),platform,f"return_d{threshold}",now.isoformat()))
+                        conn.execute("INSERT INTO funnel_events(user_id,platform,event_name,source,target,created_at) VALUES (?,?,?,?,?,?)", (int(user_id),platform,f"return_d{threshold}",(source or (row[4] if len(row)>4 else row[1]) or ""),(target or (row[5] if len(row)>5 else row[2]) or ""),now.isoformat()))
         else:
             conn.execute("""INSERT INTO user_funnel_state(user_id,platform,first_source,first_target,first_seen_at,last_seen_at,visit_count,referral_code,last_source,last_target,last_source_at) VALUES (?,?,?,?,?,?,?,?,?,?,?)""", (int(user_id),platform,source or "",target or "",now.isoformat(),now.isoformat(),1 if increment_visit else 0,referral_code,source or "",target or "",now.isoformat() if source else ""))
         profile = conn.execute("SELECT church_name,birth_date,notifications FROM users WHERE user_id=?", (int(user_id),)).fetchone()
@@ -3679,6 +3767,7 @@ async def publish_channel_slot(msk_now, hour, rubric, cta_key, prompt):
         save_post_source(post_key, source, variant)
         if ok:
             set_app_setting("tg_last_channel_failure", "")
+            track_funnel_event(OWNER_ID, "Telegram", "channel_post_published", source=source, target=cta_key, value=post_key, metadata=rubric)
             logging.info(f"Канал ТГ: опубликовано — {rubric}")
             if hour == 7:
                 asyncio.create_task(morning_broadcast())
@@ -4189,6 +4278,13 @@ async def cmd_funnel_report_tg(message: Message):
     await message.answer(funnel_report_text("Telegram", 7))
 
 
+@dp.message(Command("funnel_sources"))
+async def cmd_funnel_sources_tg(message: Message):
+    if message.from_user.id != OWNER_ID:
+        return
+    await message.answer(funnel_source_report_text("Telegram", 30))
+
+
 
 async def weekly_funnel_report_loop_tg():
     await asyncio.sleep(90)
@@ -4502,7 +4598,7 @@ async def check_donation_payments_loop_tg():
                         payment=await asyncio.to_thread(Payment.find_one,payment_id); remote=str(getattr(payment,"status","pending")); _mark_donation_field(payment_id,"checked_at",now.isoformat())
                         if remote in {"canceled","cancelled"}: _mark_donation_field(payment_id,"status","canceled"); continue
                         if remote!="succeeded": _mark_donation_field(payment_id,"status",remote if remote in {"pending","waiting_for_capture"} else "pending"); continue
-                        _mark_donation_field(payment_id,"status","succeeded"); _mark_donation_field(payment_id,"paid_at",now.isoformat()); set_funnel_flag(user_id,"Telegram","donation_made",1); track_funnel_event(user_id,"Telegram","donation_succeeded",value=str(amount))
+                        _mark_donation_field(payment_id,"status","succeeded"); _mark_donation_field(payment_id,"paid_at",now.isoformat()); set_funnel_flag(user_id,"Telegram","donation_made",1); track_attributed_event(user_id,"Telegram","donation_succeeded",target="donate",value=str(amount))
                     if not user_n:
                         await bot.send_message(chat_id,f"🕯️ Пожертвование {amount} рублей прошло успешно.\n\nБлагодарим за поддержку проекта «С верой». Да хранит вас Господь!",reply_markup=main_menu()); _mark_donation_field(payment_id,"user_notified",1)
                     if not owner_n:
@@ -5637,6 +5733,7 @@ async def process_new_review(message: Message, review_text: str):
         logging.error(f"Не удалось уведомить владельца об отзыве #{review_id}: {e}")
     set_step(message.from_user.id, "idle")
     set_funnel_flag(message.from_user.id, "Telegram", "review_left", 1)
+    track_attributed_event(message.from_user.id, "Telegram", "review_submitted", target="review", value=str(review_id))
     await message.answer(
         "☦️ Спасибо за ваш отзыв!\n\nМы его получили. При необходимости команда проекта ответит вам прямо здесь.\n\nМожно ли использовать отзыв в канале анонимно — без имени и личных данных?",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
