@@ -4574,6 +4574,19 @@ async def channel_watchdog_loop():
 
 
 # ========== FASTAPI / LIFECYCLE ==========
+MAX_HEARTBEAT_FILE = Path("/tmp/vera_max.heartbeat")
+
+
+async def external_watchdog_heartbeat_loop():
+    """Обновляет heartbeat-файл для независимого systemd watchdog."""
+    while True:
+        try:
+            MAX_HEARTBEAT_FILE.touch(exist_ok=True)
+        except Exception as e:
+            logging.error(f"Не удалось обновить MAX heartbeat: {e}")
+        await asyncio.sleep(30)
+
+
 app = FastAPI(title="С верой — MAX", version="5.0.2")
 BACKGROUND_TASKS = set()
 
@@ -4591,6 +4604,8 @@ async def startup():
     """Инициализирует БД, webhook и все постоянные фоновые процессы."""
     init_db()
     await register_webhook()
+    MAX_HEARTBEAT_FILE.touch(exist_ok=True)
+    spawn_background(external_watchdog_heartbeat_loop())
     spawn_background(asyncio.to_thread(ensure_review_sheet_schema))
     spawn_background(channel_scheduler_supervisor())
     spawn_background(channel_watchdog_loop())
@@ -4709,8 +4724,8 @@ async def _process_webhook_request(request):
 
         elif update_type == "bot_started":
             user = data.get("user", {})
-            user_id = int(user.get("user_id") or 0)
-            raw_chat_id = data.get("chat_id") or user_id
+            chat_id = data.get("chat_id") or user.get("user_id")
+            user_id = user.get("user_id", 0)
             first_name = user.get("name", "друг")
             start_payload = str(
                 data.get("payload")
@@ -4718,26 +4733,8 @@ async def _process_webhook_request(request):
                 or data.get("message", {}).get("body", {}).get("payload")
                 or ""
             ).strip()
-
-            # MAX может прислать chat_id канала, если бот запущен кнопкой из канала.
-            # Личное меню и deep-link результат всегда отправляем самому пользователю,
-            # а не в канал. Это не затрагивает автопостинг и его fail-safe.
-            if not user_id:
-                logging.error(f"BOT_STARTED без user_id: {data}")
-                return JSONResponse({"ok": True})
-
-            if raw_chat_id and str(raw_chat_id).startswith("-"):
-                chat_id = user_id
-                logging.info(
-                    f"BOT_STARTED из канала: raw_chat_id={raw_chat_id}; "
-                    f"перенаправляем в личный чат user_id={user_id}"
-                )
-            else:
-                chat_id = raw_chat_id or user_id
-
             logging.info(
-                f"BOT_STARTED: chat_id={chat_id} raw_chat_id={raw_chat_id} "
-                f"user_id={user_id} payload={start_payload}"
+                f"BOT_STARTED: chat_id={chat_id} user_id={user_id} payload={start_payload}"
             )
             await handle_start(chat_id, user_id, first_name, "", start_payload)
 
