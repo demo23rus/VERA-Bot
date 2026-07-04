@@ -589,6 +589,15 @@ def init_db():
         handled_by TEXT DEFAULT ''
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_channel_clicks_source ON channel_clicks(source)")
+    c.execute("""CREATE TABLE IF NOT EXISTS loved_ones (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        user_id INTEGER NOT NULL,
+        name TEXT NOT NULL,
+        kind TEXT NOT NULL CHECK(kind IN ('health','repose')),
+        note TEXT DEFAULT '',
+        created_at TEXT NOT NULL
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_loved_ones_user ON loved_ones(user_id,kind,id)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_channel_posts_date ON channel_posts(post_date)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_user_reviews_status ON user_reviews(status)")
     # Premium funnel V3: аналитика, активация, удержание и рефералы.
@@ -1389,75 +1398,173 @@ def record_channel_click(user_id, source, target):
         )
         conn.commit()
         conn.close()
+        try:
+            import threading
+            threading.Thread(target=sheets_record_click_tg, args=(user_id,), daemon=True).start()
+        except Exception:
+            pass
     except Exception as e:
         logging.error(f"Не удалось записать переход из канала: {e}")
 
-# ========== GOOGLE SHEETS ==========
+# ========== GOOGLE SHEETS — КОМПАКТНАЯ КНИГА ==========
+COMPACT_SHEET_HEADERS = ["Дата", "ID", "Пользователь", "Клики", "Отзыв", "Предложение", "Пожертвование"]
+COMPACT_SHEET_TG = "Вера ТГ"
+COMPACT_SHEET_MAX = "Вера MAX"
+
+
+def _open_spreadsheet():
+    scopes = ["https://www.googleapis.com/auth/spreadsheets"]
+    creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+    client = gspread.authorize(creds)
+    return client.open_by_key(SPREADSHEET_ID)
+
+
+def _ensure_compact_sheet(sp, title):
+    try:
+        sheet = sp.worksheet(title)
+    except Exception:
+        sheet = sp.add_worksheet(title=title, rows=2000, cols=len(COMPACT_SHEET_HEADERS))
+    old = sheet.get_all_values()
+    if not old or old[0] != COMPACT_SHEET_HEADERS:
+        migrated = []
+        for row in old[1:] if old else []:
+            if not row:
+                continue
+            # Старые листы: ID был в первом столбце.
+            uid = (row[0] if len(row) > 0 else "").strip()
+            if not uid or not uid.lstrip('-').isdigit():
+                continue
+            username = row[1].strip() if len(row) > 1 else ""
+            name = row[2].strip() if len(row) > 2 else ""
+            person = " / ".join(x for x in (name, username) if x and x != "—") or "—"
+            date_value = ""
+            for idx in (9, 7, 4, 3):
+                if len(row) > idx and row[idx].strip():
+                    date_value = row[idx].strip(); break
+            migrated.append([date_value or datetime.now().strftime("%d.%m.%Y %H:%M"), uid, person, "0", "", "", "0"])
+        sheet.clear()
+        sheet.resize(rows=max(2000, len(migrated)+20), cols=len(COMPACT_SHEET_HEADERS))
+        sheet.update(range_name=f"A1:G{len(migrated)+1}", values=[COMPACT_SHEET_HEADERS] + migrated)
+    return sheet
+
+
+def ensure_compact_workbook_tg():
+    try:
+        sp = _open_spreadsheet()
+        _ensure_compact_sheet(sp, COMPACT_SHEET_TG)
+        _ensure_compact_sheet(sp, COMPACT_SHEET_MAX)
+        for ws in list(sp.worksheets()):
+            if ws.title not in {COMPACT_SHEET_TG, COMPACT_SHEET_MAX}:
+                try:
+                    sp.del_worksheet(ws)
+                except Exception as e:
+                    logging.warning(f"Не удалось удалить лишний лист {ws.title}: {e}")
+    except Exception as e:
+        logging.error(f"Google Sheets compact setup TG: {e}")
+
+
 def get_sheet():
     try:
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds  = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
-        client = gspread.authorize(creds)
-        sp     = client.open_by_key(SPREADSHEET_ID)
-        try:
-            sheet = sp.worksheet("ВераТГ")
-        except Exception:
-            sheet = sp.add_worksheet(title="ВераТГ", rows=1000, cols=10)
-            sheet.insert_row(["ID","Username","Имя","Церковное имя","Дата рождения","День ангела","Тариф","Дата регистрации","Запросов AI","Последняя активность","Отзывов","Пожертвований"], 1)
-        return sheet
+        return _ensure_compact_sheet(_open_spreadsheet(), COMPACT_SHEET_TG)
     except Exception as e:
         logging.error(f"Google Sheets ошибка: {e}")
         return None
 
+
+def _compact_user_label(username, first_name):
+    parts = []
+    if first_name: parts.append(str(first_name))
+    if username: parts.append("@" + str(username).lstrip("@"))
+    return " / ".join(parts) or "—"
+
+
+def _compact_find_or_add(sheet, user_id, username="", first_name=""):
+    ids = sheet.col_values(2)
+    uid = str(user_id)
+    if uid in ids:
+        row = ids.index(uid) + 1
+        if username or first_name:
+            sheet.update_cell(row, 3, _compact_user_label(username, first_name))
+        sheet.update_cell(row, 1, datetime.now().strftime("%d.%m.%Y %H:%M"))
+        return row
+    sheet.append_row([datetime.now().strftime("%d.%m.%Y %H:%M"), uid, _compact_user_label(username, first_name), "0", "", "", "0"])
+    return len(ids) + 1
+
+
 def sheets_add_user(user_id, username, first_name):
     try:
         sheet = get_sheet()
-        if not sheet:
-            return
-        col = sheet.col_values(1)
-        if str(user_id) in col:
-            return
-        sheet.append_row([
-            str(user_id),
-            f"@{username}" if username else "—",
-            first_name or "—",
-            "—", "—", "—", "Бесплатный",
-            datetime.now().strftime("%d.%m.%Y %H:%M"),
-            "0",
-            datetime.now().strftime("%d.%m.%Y %H:%M"),
-            "0",
-            "0"
-        ])
+        if sheet: _compact_find_or_add(sheet, user_id, username, first_name)
     except Exception as e:
         logging.error(f"Sheets add_user: {e}")
+
 
 def sheets_update_activity(user_id):
     try:
         sheet = get_sheet()
-        if not sheet:
-            return
-        col = sheet.col_values(1)
-        if str(user_id) in col:
-            row = col.index(str(user_id)) + 1
-            lim = get_limits(user_id)
-            sheet.update_cell(row, 9,  str(lim["ai_requests"]))
-            sheet.update_cell(row, 10, datetime.now().strftime("%d.%m.%Y %H:%M"))
+        if sheet: _compact_find_or_add(sheet, user_id)
     except Exception as e:
         logging.error(f"Sheets update_activity: {e}")
 
+
 def sheets_update_profile(user_id, church_name, birth_date, angel_day):
+    sheets_update_activity(user_id)
+
+
+def sheets_record_click_tg(user_id):
     try:
         sheet = get_sheet()
-        if not sheet:
-            return
-        col = sheet.col_values(1)
-        if str(user_id) in col:
-            row = col.index(str(user_id)) + 1
-            sheet.update_cell(row, 4, church_name or "—")
-            sheet.update_cell(row, 5, birth_date  or "—")
-            sheet.update_cell(row, 6, angel_day   or "—")
+        if not sheet: return
+        row = _compact_find_or_add(sheet, user_id)
+        value = sheet.cell(row, 4).value or "0"
+        sheet.update_cell(row, 4, str(int(value) + 1))
     except Exception as e:
-        logging.error(f"Sheets update_profile: {e}")
+        logging.error(f"Sheets record click TG: {e}")
+
+
+def _looks_like_suggestion(text):
+    low = (text or "").lower()
+    return any(x in low for x in ("предлага", "добавьте", "добавить", "не хватает", "хотелось", "улучш", "сделайте"))
+
+
+def sheets_add_review_tg(review_id, user_id, username, first_name, text):
+    try:
+        sheet = get_sheet()
+        if not sheet: return
+        row = _compact_find_or_add(sheet, user_id, username, first_name)
+        target_col = 6 if _looks_like_suggestion(text) else 5
+        old = sheet.cell(row, target_col).value or ""
+        new = (old + "\n" if old else "") + f"{datetime.now().strftime('%d.%m.%Y')}: {text.strip()}"
+        sheet.update_cell(row, target_col, new[:45000])
+    except Exception as e:
+        logging.error(f"sheets_add_review_tg: {e}")
+
+
+def sheets_update_review_tg(*args, **kwargs):
+    return None
+
+
+def sheets_update_latest_review_by_user_tg(*args, **kwargs):
+    return None
+
+
+def ensure_review_sheet_schema_tg():
+    ensure_compact_workbook_tg()
+
+
+def sheets_add_donation(user_id, username, first_name, amount, source="Telegram"):
+    try:
+        sheet = get_sheet()
+        if not sheet: return False
+        row = _compact_find_or_add(sheet, user_id, username, first_name)
+        current = sheet.cell(row, 7).value or "0"
+        try: total = int(float(str(current).replace(" ", "").replace(",", ".")))
+        except Exception: total = 0
+        sheet.update_cell(row, 7, str(total + int(amount)))
+        return True
+    except Exception as e:
+        logging.error(f"Sheets add_donation: {e}")
+        return False
 
 # ========== ПРАВОСЛАВНЫЙ КАЛЕНДАРЬ ==========
 # Великие праздники (фиксированные)
@@ -2974,124 +3081,59 @@ def add_donation_to_sheet(user_id, username, first_name, amount):
         return False
 
 
-REVIEW_SHEET_HEADERS_TG = [
-    "ID", "Username", "Имя", "Дата", "Тип", "Отзыв",
-    "Номер отзыва", "Статус", "Ответ владельца", "Дата ответа", "Ответил"
-]
+# ========== МОИ БЛИЗКИЕ ==========
+def add_loved_one(user_id: int, name: str, kind: str, note: str = "") -> int:
+    clean = " ".join((name or "").strip().split())[:120]
+    if not clean or kind not in {"health", "repose"}:
+        return 0
+    conn = db_connect()
+    cur = conn.execute(
+        "INSERT INTO loved_ones(user_id,name,kind,note,created_at) VALUES (?,?,?,?,?)",
+        (int(user_id), clean, kind, (note or "")[:300], datetime.now().isoformat()),
+    )
+    conn.commit()
+    rid = cur.lastrowid
+    conn.close()
+    return int(rid)
 
 
-def ensure_review_sheet_tg(sp=None):
-    """Создаёт или расширяет лист отзывов до CRM-структуры."""
-    try:
-        if sp is None:
-            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-            creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
-            client = gspread.authorize(creds)
-            sp = client.open_by_key(SPREADSHEET_ID)
-        try:
-            sheet = sp.worksheet("Отзывы ВераБот")
-        except Exception:
-            sheet = sp.add_worksheet(title="Отзывы ВераБот", rows=1000, cols=len(REVIEW_SHEET_HEADERS_TG))
-        if getattr(sheet, "col_count", 0) < len(REVIEW_SHEET_HEADERS_TG):
-            sheet.resize(cols=len(REVIEW_SHEET_HEADERS_TG))
-        current = sheet.row_values(1)
-        for index, header in enumerate(REVIEW_SHEET_HEADERS_TG, start=1):
-            if len(current) < index or current[index - 1] != header:
-                sheet.update_cell(1, index, header)
-        return sheet
-    except Exception as e:
-        logging.error(f"ensure_review_sheet_tg: {e}")
-        return None
+def get_loved_ones(user_id: int):
+    conn = db_connect()
+    rows = conn.execute(
+        "SELECT id,name,kind,note FROM loved_ones WHERE user_id=? ORDER BY kind,id",
+        (int(user_id),),
+    ).fetchall()
+    conn.close()
+    return rows
 
 
-def ensure_review_sheet_schema_tg():
-    ensure_review_sheet_tg()
+def delete_loved_one(user_id: int, item_id: int) -> bool:
+    conn = db_connect()
+    cur = conn.execute("DELETE FROM loved_ones WHERE id=? AND user_id=?", (int(item_id), int(user_id)))
+    conn.commit()
+    ok = cur.rowcount > 0
+    conn.close()
+    return ok
 
 
-def sheets_add_review_tg(review_id, user_id, username, first_name, text):
-    try:
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
-        client = gspread.authorize(creds)
-        sp = client.open_by_key(SPREADSHEET_ID)
-        sheet = ensure_review_sheet_tg(sp)
-        if not sheet:
-            return
-        sheet.append_row([
-            str(user_id),
-            f"@{username}" if username else "—",
-            first_name or "—",
-            datetime.now().strftime("%d.%m.%Y %H:%M"),
-            "Отзыв/пожелание",
-            text,
-            str(review_id),
-            "Новый",
-            "—",
-            "—",
-            "—",
-        ])
-        try:
-            main_sheet = sp.worksheet("ВераТГ")
-            col = main_sheet.col_values(1)
-            if str(user_id) in col:
-                row = col.index(str(user_id)) + 1
-                val = main_sheet.cell(row, 11).value or "0"
-                main_sheet.update_cell(row, 11, str(int(val) + 1))
-        except Exception:
-            pass
-    except Exception as e:
-        logging.error(f"sheets_add_review_tg: {e}")
+def loved_ones_note_text(user_id: int, kind: str = "") -> str:
+    rows = [r for r in get_loved_ones(user_id) if not kind or r[2] == kind]
+    if not rows:
+        return "Список пока пуст."
+    parts = []
+    for title, key in (("💛 О здравии", "health"), ("🕯️ Об упокоении", "repose")):
+        names = [r[1] for r in rows if r[2] == key]
+        if names:
+            parts.append(title + "\n" + "\n".join(f"• {name}" for name in names))
+    return "\n\n".join(parts)
 
 
-def sheets_update_review_tg(review_id, status, reply_text="", replied_at="", handled_by="Владелец"):
-    import time
-    for attempt in range(1, 6):
-        try:
-            scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-            creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
-            client = gspread.authorize(creds)
-            sp = client.open_by_key(SPREADSHEET_ID)
-            sheet = ensure_review_sheet_tg(sp)
-            if not sheet:
-                return
-            review_ids = sheet.col_values(7)
-            review_id_str = str(review_id)
-            if review_id_str in review_ids:
-                row = review_ids.index(review_id_str) + 1
-                sheet.update_cell(row, 8, status)
-                sheet.update_cell(row, 9, reply_text or "—")
-                sheet.update_cell(row, 10, replied_at or "—")
-                sheet.update_cell(row, 11, handled_by or "Владелец")
-                return
-            if attempt < 5:
-                time.sleep(2)
-        except Exception as e:
-            logging.error(f"sheets_update_review_tg attempt {attempt}: {e}")
-            if attempt < 5:
-                time.sleep(2)
-    logging.warning(f"Отзыв Telegram #{review_id} не найден в Google Sheets")
-
-
-def sheets_update_latest_review_by_user_tg(user_id, status, reply_text, replied_at, handled_by="Владелец"):
-    try:
-        scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
-        client = gspread.authorize(creds)
-        sp = client.open_by_key(SPREADSHEET_ID)
-        sheet = ensure_review_sheet_tg(sp)
-        if not sheet:
-            return
-        ids = sheet.col_values(1)
-        rows = [i + 1 for i, value in enumerate(ids) if value == str(user_id)]
-        if not rows:
-            return
-        row = rows[-1]
-        sheet.update_cell(row, 8, status)
-        sheet.update_cell(row, 9, reply_text or "—")
-        sheet.update_cell(row, 10, replied_at or "—")
-        sheet.update_cell(row, 11, handled_by or "Владелец")
-    except Exception as e:
-        logging.error(f"sheets_update_latest_review_by_user_tg: {e}")
+def loved_ones_zapiska_text(user_id: int, kind: str) -> str:
+    names = [r[1] for r in get_loved_ones(user_id) if r[2] == kind][:10]
+    if not names:
+        return ""
+    title = "О ЗДРАВИИ" if kind == "health" else "ОБ УПОКОЕНИИ"
+    return title + "\n\n" + "\n".join(names)
 
 # ========== МЕНЮ ==========
 def main_menu():
@@ -3114,6 +3156,7 @@ def main_menu():
             InlineKeyboardButton(text="🗺️ Найти храм рядом",   callback_data="find_church"),
         ],
         [InlineKeyboardButton(text="📖 Евангельская мысль", callback_data="daily_gospel")],
+        [InlineKeyboardButton(text="🕊️ Мои близкие", callback_data="loved_ones")],
         [
             InlineKeyboardButton(text="👤 Мой профиль",        callback_data="profile"),
             InlineKeyboardButton(text="❓ Задать вопрос",      callback_data="ask_question"),
@@ -4658,7 +4701,7 @@ def delete_user_data_tg(user_id: int):
     conn = db_connect()
     for table in (
         "favorites", "limits", "subscriptions", "pending_payments", "nurture_journeys",
-        "funnel_events", "user_sessions", "channel_clicks", "topic_votes",
+        "funnel_events", "user_sessions", "channel_clicks", "topic_votes", "loved_ones",
     ):
         try:
             conn.execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
@@ -5150,6 +5193,99 @@ async def cb_prayer_for_me(callback: CallbackQuery):
         parse_mode="Markdown",
         reply_markup=back_menu()
     )
+
+@dp.callback_query(F.data == "loved_ones")
+async def cb_loved_ones(callback: CallbackQuery):
+    await callback.answer()
+    rows = get_loved_ones(callback.from_user.id)
+    buttons = [
+        [InlineKeyboardButton(text="➕ Добавить о здравии", callback_data="loved_add_health")],
+        [InlineKeyboardButton(text="➕ Добавить об упокоении", callback_data="loved_add_repose")],
+    ]
+    if rows:
+        buttons += [
+            [
+                InlineKeyboardButton(text="📝 Записка о здравии", callback_data="loved_note_health"),
+                InlineKeyboardButton(text="🕯️ Записка об упокоении", callback_data="loved_note_repose"),
+            ],
+            [InlineKeyboardButton(text="✏️ Управлять списком", callback_data="loved_manage")],
+        ]
+    buttons.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
+    await callback.message.answer(
+        "🕊️ *Мои близкие*\n\n"
+        + loved_ones_note_text(callback.from_user.id)
+        + "\n\nИмена хранятся только в вашем личном списке.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+
+
+@dp.callback_query(F.data.in_({"loved_add_health", "loved_add_repose"}))
+async def cb_loved_add(callback: CallbackQuery):
+    await callback.answer()
+    kind = "health" if callback.data.endswith("health") else "repose"
+    set_step(callback.from_user.id, f"loved_add_{kind}")
+    await callback.message.answer(
+        ("💛" if kind == "health" else "🕯️")
+        + " Напишите одно имя. Лучше использовать церковную форму, если она известна.",
+        reply_markup=back_menu(),
+    )
+
+
+@dp.callback_query(F.data.in_({"loved_note_health", "loved_note_repose"}))
+async def cb_loved_note(callback: CallbackQuery):
+    await callback.answer()
+    kind = "health" if callback.data.endswith("health") else "repose"
+    note = loved_ones_zapiska_text(callback.from_user.id, kind)
+    if not note:
+        await callback.message.answer("Список пока пуст.", reply_markup=back_menu())
+        return
+    await callback.message.answer(
+        f"📝 *Готовая записка*\n\n```\n{note}\n```\n\n"
+        "Проверьте имена и уточните правила в своём храме.",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🕊️ Мои близкие", callback_data="loved_ones")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+        ]),
+    )
+
+
+@dp.callback_query(F.data == "loved_manage")
+async def cb_loved_manage(callback: CallbackQuery):
+    await callback.answer()
+    rows = get_loved_ones(callback.from_user.id)
+    if not rows:
+        await callback.message.answer("Список пока пуст.", reply_markup=back_menu())
+        return
+    buttons = []
+    for item_id, name, kind, _note in rows[:30]:
+        label = "здравие" if kind == "health" else "упокоение"
+        buttons.append([InlineKeyboardButton(
+            text=f"🗑️ {name} ({label})",
+            callback_data=f"loved_del:{item_id}",
+        )])
+    buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="loved_ones")])
+    await callback.message.answer(
+        "Нажмите на имя, которое нужно удалить:",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
+    )
+
+
+@dp.callback_query(F.data.startswith("loved_del:"))
+async def cb_loved_delete(callback: CallbackQuery):
+    await callback.answer()
+    try:
+        ok = delete_loved_one(callback.from_user.id, int(callback.data.split(":", 1)[1]))
+    except Exception:
+        ok = False
+    await callback.message.answer(
+        "✅ Имя удалено." if ok else "⚠️ Не удалось удалить имя.",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="🕊️ Мои близкие", callback_data="loved_ones")]
+        ]),
+    )
+
 
 @dp.callback_query(F.data == "make_zapiska")
 async def cb_make_zapiska(callback: CallbackQuery):
@@ -6405,6 +6541,14 @@ async def handle_text(message: Message):
             logging.error(f"Ошибка молитвы за меня: {e}")
             await message.answer("⚠️ Не удалось составить молитву. Попробуйте позже.", reply_markup=back_menu())
         return
+
+    if step in {"loved_add_health", "loved_add_repose"}:
+        kind = "health" if step.endswith("health") else "repose"
+        name = " ".join(text.strip().split())
+        if not name or len(name) > 120:
+            await message.answer("⚠️ Напишите одно имя длиной до 120 символов.", reply_markup=back_menu()); return
+        add_loved_one(user_id, name, kind); set_step(user_id, "idle")
+        await message.answer(f"✅ {name} добавлен{'а' if name.endswith('а') else ''} в список {'о здравии' if kind=='health' else 'об упокоении'}.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🕊️ Открыть список",callback_data="loved_ones")],[InlineKeyboardButton(text="➕ Добавить ещё",callback_data=f"loved_add_{kind}")],[InlineKeyboardButton(text="🏠 Главное меню",callback_data="main_menu")]])); return
 
     if step == "zapiska_zdravie_names":
         set_step(user_id, "idle")
