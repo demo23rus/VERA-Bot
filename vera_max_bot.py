@@ -314,6 +314,31 @@ def get_loved_ones(user_id:int):
 def delete_loved_one(user_id:int,item_id:int)->bool:
     conn=db_connect(); cur=conn.execute("DELETE FROM loved_ones WHERE id=? AND user_id=?",(int(item_id),int(user_id))); conn.commit(); ok=cur.rowcount>0; conn.close(); return ok
 
+def move_loved_one(user_id:int,item_id:int,new_kind:str)->bool:
+    if new_kind not in {"health","repose"}: return False
+    conn=db_connect(); cur=conn.execute("UPDATE loved_ones SET kind=? WHERE id=? AND user_id=?",(new_kind,int(item_id),int(user_id))); conn.commit(); ok=cur.rowcount>0; conn.close(); return ok
+
+def get_loved_reminders(user_id:int)->bool:
+    conn=db_connect(); row=conn.execute("SELECT reminders FROM loved_ones_settings WHERE user_id=?",(int(user_id),)).fetchone(); conn.close(); return bool(row and row[0])
+
+def set_loved_reminders(user_id:int,chat_id:int,enabled:bool):
+    conn=db_connect(); conn.execute("INSERT INTO loved_ones_settings(user_id,chat_id,reminders,last_sent_date) VALUES (?,?,?,'') ON CONFLICT(user_id) DO UPDATE SET chat_id=excluded.chat_id,reminders=excluded.reminders",(int(user_id),int(chat_id),1 if enabled else 0)); conn.commit(); conn.close()
+
+async def loved_ones_reminder_loop_max():
+    await asyncio.sleep(180)
+    while True:
+        try:
+            now=datetime.utcnow()+timedelta(hours=3)
+            if now.weekday()==6 and now.hour==10:
+                today=now.date().isoformat(); conn=db_connect(); rows=conn.execute("SELECT user_id,chat_id FROM loved_ones_settings WHERE reminders=1 AND COALESCE(last_sent_date,'')<>?",(today,)).fetchall(); conn.close()
+                for uid,cid in rows[:200]:
+                    try:
+                        await send_message(int(cid),"🕊️ Доброе напоминание: откройте список близких и помолитесь о тех, кто вам дорог.",[[btn("🕊️ Мои близкие","loved_ones")]])
+                        conn=db_connect(); conn.execute("UPDATE loved_ones_settings SET last_sent_date=? WHERE user_id=?",(today,int(uid))); conn.commit(); conn.close()
+                    except Exception as e: logging.warning(f"Loved ones reminder MAX {uid}: {e}")
+        except Exception as e: logging.error(f"Loved ones reminder loop MAX: {e}")
+        await asyncio.sleep(3600)
+
 def loved_ones_note_text(user_id:int,kind:str="") -> str:
     rows=[r for r in get_loved_ones(user_id) if not kind or r[2]==kind]
     if not rows:return "Список пока пуст."
@@ -932,6 +957,7 @@ def init_db():
         note TEXT DEFAULT '', created_at TEXT NOT NULL
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_loved_ones_user ON loved_ones(user_id,kind,id)")
+    c.execute("""CREATE TABLE IF NOT EXISTS loved_ones_settings (user_id INTEGER PRIMARY KEY, chat_id INTEGER DEFAULT 0, reminders INTEGER DEFAULT 0, last_sent_date TEXT DEFAULT '')""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_channel_posts_date ON channel_posts(post_date)")
     # Отзывы и ответы владельца.
     c.execute("""CREATE TABLE IF NOT EXISTS user_reviews (
@@ -2781,27 +2807,39 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
         )
 
     elif payload == "loved_ones":
-        rows=get_loved_ones(user_id); buttons=[[btn("➕ Добавить о здравии","loved_add_health")],[btn("➕ Добавить об упокоении","loved_add_repose")]]
-        if rows: buttons += [[btn("📝 Записка о здравии","loved_note_health"),btn("🕯️ Записка об упокоении","loved_note_repose")],[btn("✏️ Управлять списком","loved_manage")]]
-        buttons.append([btn("🏠 Главное меню","main_menu")]); await send_message(chat_id,"🕊️ Мои близкие\n\n"+loved_ones_note_text(user_id)+"\n\nИмена хранятся только в вашем личном списке.",buttons)
-
-    elif payload in ("loved_add_health","loved_add_repose"):
-        kind="health" if payload.endswith("health") else "repose"; set_step(user_id,f"loved_add_{kind}"); await send_message(chat_id,("💛" if kind=="health" else "🕯️")+" Напишите одно имя. Лучше использовать церковную форму, если она известна.",back_main())
-
-    elif payload in ("loved_note_health","loved_note_repose"):
+        enabled=get_loved_reminders(user_id)
+        buttons=[[btn("🙏 О здравии","loved_view_health"),btn("🕯️ Об упокоении","loved_view_repose")],[btn("➕ Добавить человека","loved_add_choose")],[btn("📝 Собрать записку в храм","loved_note_choose")],[btn("🔔 Напоминания: включены" if enabled else "🔕 Напоминания: выключены","loved_reminders")],[btn("✏️ Изменить список","loved_manage")],[btn("🏠 Главное меню","main_menu")]]
+        await send_message(chat_id,"🕊️ Мои близкие\n\nСохраняйте имена близких, готовьте записки в храм и держите важные имена рядом.\n\nИмена видны только вам.",buttons)
+    elif payload in {"loved_view_health","loved_view_repose"}:
+        kind="health" if payload.endswith("health") else "repose"; title="🙏 О здравии" if kind=="health" else "🕯️ Об упокоении"
+        await send_message(chat_id,title+"\n\n"+loved_ones_note_text(user_id,kind),[[btn("➕ Добавить имя",f"loved_add_{kind}")],[btn("◀️ Назад","loved_ones")]])
+    elif payload == "loved_add_choose":
+        await send_message(chat_id,"Куда добавить имя?",[[btn("🙏 О здравии","loved_add_health")],[btn("🕯️ Об упокоении","loved_add_repose")],[btn("◀️ Назад","loved_ones")]])
+    elif payload in {"loved_add_health","loved_add_repose"}:
+        kind="health" if payload.endswith("health") else "repose"; set_step(user_id,f"loved_add_{kind}"); await send_message(chat_id,("🙏" if kind=="health" else "🕯️")+" Напишите одно имя. Лучше использовать церковную форму, если она известна.",[[btn("◀️ Назад","loved_ones")]])
+    elif payload == "loved_note_choose":
+        await send_message(chat_id,"Какую записку собрать?",[[btn("🙏 О здравии","loved_note_health")],[btn("🕯️ Об упокоении","loved_note_repose")],[btn("◀️ Назад","loved_ones")]])
+    elif payload in {"loved_note_health","loved_note_repose"}:
         kind="health" if payload.endswith("health") else "repose"; note=loved_ones_zapiska_text(user_id,kind)
         await send_message(chat_id,("📝 Готовая записка\n\n"+note+"\n\nПроверьте имена и уточните правила в своём храме.") if note else "Список пока пуст.",[[btn("🕊️ Мои близкие","loved_ones")],[btn("🏠 Главное меню","main_menu")]])
-
+    elif payload == "loved_reminders":
+        enabled=not get_loved_reminders(user_id); set_loved_reminders(user_id,chat_id,enabled); await send_message(chat_id,"✅ Еженедельное напоминание включено. Оно будет приходить по воскресеньям утром." if enabled else "🔕 Напоминания выключены.",[[btn("◀️ Назад","loved_ones")]])
     elif payload == "loved_manage":
         rows=get_loved_ones(user_id)
-        if not rows: await send_message(chat_id,"Список пока пуст.",back_main())
+        if not rows: await send_message(chat_id,"Список пока пуст.",[[btn("➕ Добавить человека","loved_add_choose")],[btn("◀️ Назад","loved_ones")]])
         else:
-            buttons=[[btn(f"🗑️ {name} ({'здравие' if kind=='health' else 'упокоение'})",f"loved_del:{item_id}")] for item_id,name,kind,_ in rows[:30]]; buttons.append([btn("◀️ Назад","loved_ones")]); await send_message(chat_id,"Нажмите на имя, которое нужно удалить:",buttons)
-
+            buttons=[[btn(("🙏 " if kind=="health" else "🕯️ ")+name,f"loved_item:{item_id}")] for item_id,name,kind,_ in rows[:30]]; buttons.append([btn("◀️ Назад","loved_ones")]); await send_message(chat_id,"Выберите имя, которое нужно изменить:",buttons)
+    elif payload.startswith("loved_item:"):
+        item_id=int(payload.split(":",1)[1]); rows=[r for r in get_loved_ones(user_id) if r[0]==item_id]
+        if not rows: await send_message(chat_id,"Имя не найдено.")
+        else:
+            _,name,kind,_=rows[0]; other="repose" if kind=="health" else "health"; label="🕯️ Перенести в упокоение" if other=="repose" else "🙏 Перенести в здравие"; await send_message(chat_id,"✏️ "+name,[[btn(label,f"loved_move:{item_id}:{other}")],[btn("🗑️ Удалить",f"loved_del:{item_id}")],[btn("◀️ Назад","loved_manage")]])
+    elif payload.startswith("loved_move:"):
+        _,item_id,kind=payload.split(":",2); ok=move_loved_one(user_id,int(item_id),kind); await send_message(chat_id,"✅ Имя перенесено." if ok else "⚠️ Не удалось изменить запись.",[[btn("✏️ Изменить список","loved_manage")],[btn("🕊️ Мои близкие","loved_ones")]])
     elif payload.startswith("loved_del:"):
         try: ok=delete_loved_one(user_id,int(payload.split(":",1)[1]))
         except Exception: ok=False
-        await send_message(chat_id,"✅ Имя удалено." if ok else "⚠️ Не удалось удалить имя.",[[btn("🕊️ Мои близкие","loved_ones")]])
+        await send_message(chat_id,"✅ Имя удалено." if ok else "⚠️ Не удалось удалить имя.",[[btn("✏️ Изменить список","loved_manage")],[btn("🕊️ Мои близкие","loved_ones")]])
 
     elif payload == "make_zapiska":
         set_step(user_id, "zapiska_type")
@@ -4590,6 +4628,8 @@ def spawn_background(coro):
 
 @app.on_event("startup")
 async def startup():
+    asyncio.create_task(max_heartbeat_loop())
+    asyncio.create_task(loved_ones_reminder_loop_max())
     """Инициализирует БД, webhook и все постоянные фоновые процессы."""
     init_db()
     await register_webhook()

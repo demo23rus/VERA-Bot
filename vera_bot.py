@@ -598,6 +598,7 @@ def init_db():
         created_at TEXT NOT NULL
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_loved_ones_user ON loved_ones(user_id,kind,id)")
+    c.execute("""CREATE TABLE IF NOT EXISTS loved_ones_settings (user_id INTEGER PRIMARY KEY, reminders INTEGER DEFAULT 0, last_sent_date TEXT DEFAULT '')""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_channel_posts_date ON channel_posts(post_date)")
     c.execute("CREATE INDEX IF NOT EXISTS idx_user_reviews_status ON user_reviews(status)")
     # Premium funnel V3: аналитика, активация, удержание и рефералы.
@@ -3120,6 +3121,69 @@ def delete_loved_one(user_id: int, item_id: int) -> bool:
     return ok
 
 
+
+def move_loved_one(user_id: int, item_id: int, new_kind: str) -> bool:
+    if new_kind not in {"health", "repose"}:
+        return False
+    conn = db_connect()
+    cur = conn.execute("UPDATE loved_ones SET kind=? WHERE id=? AND user_id=?", (new_kind, int(item_id), int(user_id)))
+    conn.commit()
+    ok = cur.rowcount > 0
+    conn.close()
+    return ok
+
+
+def get_loved_reminders(user_id: int) -> bool:
+    conn = db_connect()
+    row = conn.execute("SELECT reminders FROM loved_ones_settings WHERE user_id=?", (int(user_id),)).fetchone()
+    conn.close()
+    return bool(row and row[0])
+
+
+def set_loved_reminders(user_id: int, enabled: bool) -> None:
+    conn = db_connect()
+    conn.execute(
+        "INSERT INTO loved_ones_settings(user_id,reminders,last_sent_date) VALUES (?,?, '') "
+        "ON CONFLICT(user_id) DO UPDATE SET reminders=excluded.reminders",
+        (int(user_id), 1 if enabled else 0),
+    )
+    conn.commit()
+    conn.close()
+
+
+async def loved_ones_reminder_loop_tg():
+    await asyncio.sleep(180)
+    while True:
+        try:
+            now = datetime.utcnow() + timedelta(hours=3)
+            if now.weekday() == 6 and now.hour == 10:
+                today = now.date().isoformat()
+                conn = db_connect()
+                rows = conn.execute(
+                    "SELECT user_id FROM loved_ones_settings WHERE reminders=1 AND COALESCE(last_sent_date,'')<>?",
+                    (today,),
+                ).fetchall()
+                conn.close()
+                for (uid,) in rows[:200]:
+                    try:
+                        await bot.send_message(
+                            int(uid),
+                            "🕊️ Доброе напоминание: откройте список близких и помолитесь о тех, кто вам дорог.",
+                            reply_markup=InlineKeyboardMarkup(inline_keyboard=[[
+                                InlineKeyboardButton(text="🕊️ Мои близкие", callback_data="loved_ones")
+                            ]]),
+                        )
+                        conn = db_connect()
+                        conn.execute("UPDATE loved_ones_settings SET last_sent_date=? WHERE user_id=?", (today, int(uid)))
+                        conn.commit()
+                        conn.close()
+                    except Exception as e:
+                        logging.warning(f"Loved ones reminder TG {uid}: {e}")
+        except Exception as e:
+            logging.error(f"Loved ones reminder loop TG: {e}")
+        await asyncio.sleep(3600)
+
+
 def loved_ones_note_text(user_id: int, kind: str = "") -> str:
     rows = [r for r in get_loved_ones(user_id) if not kind or r[2] == kind]
     if not rows:
@@ -5198,30 +5262,48 @@ async def cb_prayer_for_me(callback: CallbackQuery):
         reply_markup=back_menu()
     )
 
+
 @dp.callback_query(F.data == "loved_ones")
 async def cb_loved_ones(callback: CallbackQuery):
     await callback.answer()
-    rows = get_loved_ones(callback.from_user.id)
+    enabled = get_loved_reminders(callback.from_user.id)
     buttons = [
-        [InlineKeyboardButton(text="➕ Добавить о здравии", callback_data="loved_add_health")],
-        [InlineKeyboardButton(text="➕ Добавить об упокоении", callback_data="loved_add_repose")],
+        [InlineKeyboardButton(text="🙏 О здравии", callback_data="loved_view_health"), InlineKeyboardButton(text="🕯️ Об упокоении", callback_data="loved_view_repose")],
+        [InlineKeyboardButton(text="➕ Добавить человека", callback_data="loved_add_choose")],
+        [InlineKeyboardButton(text="📝 Собрать записку в храм", callback_data="loved_note_choose")],
+        [InlineKeyboardButton(text=("🔔 Напоминания: включены" if enabled else "🔕 Напоминания: выключены"), callback_data="loved_reminders")],
+        [InlineKeyboardButton(text="✏️ Изменить список", callback_data="loved_manage")],
+        [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
     ]
-    if rows:
-        buttons += [
-            [
-                InlineKeyboardButton(text="📝 Записка о здравии", callback_data="loved_note_health"),
-                InlineKeyboardButton(text="🕯️ Записка об упокоении", callback_data="loved_note_repose"),
-            ],
-            [InlineKeyboardButton(text="✏️ Управлять списком", callback_data="loved_manage")],
-        ]
-    buttons.append([InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")])
     await callback.message.answer(
-        "🕊️ *Мои близкие*\n\n"
-        + loved_ones_note_text(callback.from_user.id)
-        + "\n\nИмена хранятся только в вашем личном списке.",
+        "🕊️ *Мои близкие*\n\nСохраняйте имена близких, готовьте записки в храм и держите важные имена рядом.\n\nИмена видны только вам.",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
     )
+
+
+@dp.callback_query(F.data.in_({"loved_view_health", "loved_view_repose"}))
+async def cb_loved_view(callback: CallbackQuery):
+    await callback.answer()
+    kind = "health" if callback.data.endswith("health") else "repose"
+    title = "🙏 О здравии" if kind == "health" else "🕯️ Об упокоении"
+    await callback.message.answer(
+        f"{title}\n\n{loved_ones_note_text(callback.from_user.id, kind)}",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить имя", callback_data=f"loved_add_{kind}")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="loved_ones")],
+        ]),
+    )
+
+
+@dp.callback_query(F.data == "loved_add_choose")
+async def cb_loved_add_choose(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer("Куда добавить имя?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🙏 О здравии", callback_data="loved_add_health")],
+        [InlineKeyboardButton(text="🕯️ Об упокоении", callback_data="loved_add_repose")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="loved_ones")],
+    ]))
 
 
 @dp.callback_query(F.data.in_({"loved_add_health", "loved_add_repose"}))
@@ -5230,10 +5312,19 @@ async def cb_loved_add(callback: CallbackQuery):
     kind = "health" if callback.data.endswith("health") else "repose"
     set_step(callback.from_user.id, f"loved_add_{kind}")
     await callback.message.answer(
-        ("💛" if kind == "health" else "🕯️")
-        + " Напишите одно имя. Лучше использовать церковную форму, если она известна.",
+        ("🙏" if kind == "health" else "🕯️") + " Напишите одно имя. Лучше использовать церковную форму, если она известна.",
         reply_markup=back_menu(),
     )
+
+
+@dp.callback_query(F.data == "loved_note_choose")
+async def cb_loved_note_choose(callback: CallbackQuery):
+    await callback.answer()
+    await callback.message.answer("Какую записку собрать?", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="🙏 О здравии", callback_data="loved_note_health")],
+        [InlineKeyboardButton(text="🕯️ Об упокоении", callback_data="loved_note_repose")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="loved_ones")],
+    ]))
 
 
 @dp.callback_query(F.data.in_({"loved_note_health", "loved_note_repose"}))
@@ -5242,11 +5333,13 @@ async def cb_loved_note(callback: CallbackQuery):
     kind = "health" if callback.data.endswith("health") else "repose"
     note = loved_ones_zapiska_text(callback.from_user.id, kind)
     if not note:
-        await callback.message.answer("Список пока пуст.", reply_markup=back_menu())
+        await callback.message.answer("Список пока пуст.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить имя", callback_data=f"loved_add_{kind}")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="loved_ones")],
+        ]))
         return
     await callback.message.answer(
-        f"📝 *Готовая записка*\n\n```\n{note}\n```\n\n"
-        "Проверьте имена и уточните правила в своём храме.",
+        f"📝 *Готовая записка*\n\n```\n{note}\n```\n\nПроверьте имена и уточните правила в своём храме.",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup(inline_keyboard=[
             [InlineKeyboardButton(text="🕊️ Мои близкие", callback_data="loved_ones")],
@@ -5255,25 +5348,62 @@ async def cb_loved_note(callback: CallbackQuery):
     )
 
 
+@dp.callback_query(F.data == "loved_reminders")
+async def cb_loved_reminders(callback: CallbackQuery):
+    await callback.answer()
+    enabled = not get_loved_reminders(callback.from_user.id)
+    set_loved_reminders(callback.from_user.id, enabled)
+    text = "✅ Еженедельное напоминание включено. Оно будет приходить по воскресеньям утром." if enabled else "🔕 Напоминания выключены."
+    await callback.message.answer(text, reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="loved_ones")]
+    ]))
+
+
 @dp.callback_query(F.data == "loved_manage")
 async def cb_loved_manage(callback: CallbackQuery):
     await callback.answer()
     rows = get_loved_ones(callback.from_user.id)
     if not rows:
-        await callback.message.answer("Список пока пуст.", reply_markup=back_menu())
+        await callback.message.answer("Список пока пуст.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="➕ Добавить человека", callback_data="loved_add_choose")],
+            [InlineKeyboardButton(text="◀️ Назад", callback_data="loved_ones")],
+        ]))
         return
     buttons = []
     for item_id, name, kind, _note in rows[:30]:
-        label = "здравие" if kind == "health" else "упокоение"
-        buttons.append([InlineKeyboardButton(
-            text=f"🗑️ {name} ({label})",
-            callback_data=f"loved_del:{item_id}",
-        )])
+        icon = "🙏" if kind == "health" else "🕯️"
+        buttons.append([InlineKeyboardButton(text=f"{icon} {name}", callback_data=f"loved_item:{item_id}")])
     buttons.append([InlineKeyboardButton(text="◀️ Назад", callback_data="loved_ones")])
-    await callback.message.answer(
-        "Нажмите на имя, которое нужно удалить:",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons),
-    )
+    await callback.message.answer("Выберите имя, которое нужно изменить:", reply_markup=InlineKeyboardMarkup(inline_keyboard=buttons))
+
+
+@dp.callback_query(F.data.startswith("loved_item:"))
+async def cb_loved_item(callback: CallbackQuery):
+    await callback.answer()
+    item_id = int(callback.data.split(":", 1)[1])
+    rows = [r for r in get_loved_ones(callback.from_user.id) if r[0] == item_id]
+    if not rows:
+        await callback.message.answer("Имя не найдено.")
+        return
+    _, name, kind, _ = rows[0]
+    other = "repose" if kind == "health" else "health"
+    move_label = "🕯️ Перенести в упокоение" if other == "repose" else "🙏 Перенести в здравие"
+    await callback.message.answer(f"✏️ {name}", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=move_label, callback_data=f"loved_move:{item_id}:{other}")],
+        [InlineKeyboardButton(text="🗑️ Удалить", callback_data=f"loved_del:{item_id}")],
+        [InlineKeyboardButton(text="◀️ Назад", callback_data="loved_manage")],
+    ]))
+
+
+@dp.callback_query(F.data.startswith("loved_move:"))
+async def cb_loved_move(callback: CallbackQuery):
+    await callback.answer()
+    _, item_id, kind = callback.data.split(":", 2)
+    ok = move_loved_one(callback.from_user.id, int(item_id), kind)
+    await callback.message.answer("✅ Имя перенесено." if ok else "⚠️ Не удалось изменить запись.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Изменить список", callback_data="loved_manage")],
+        [InlineKeyboardButton(text="🕊️ Мои близкие", callback_data="loved_ones")],
+    ]))
 
 
 @dp.callback_query(F.data.startswith("loved_del:"))
@@ -5283,12 +5413,10 @@ async def cb_loved_delete(callback: CallbackQuery):
         ok = delete_loved_one(callback.from_user.id, int(callback.data.split(":", 1)[1]))
     except Exception:
         ok = False
-    await callback.message.answer(
-        "✅ Имя удалено." if ok else "⚠️ Не удалось удалить имя.",
-        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
-            [InlineKeyboardButton(text="🕊️ Мои близкие", callback_data="loved_ones")]
-        ]),
-    )
+    await callback.message.answer("✅ Имя удалено." if ok else "⚠️ Не удалось удалить имя.", reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="✏️ Изменить список", callback_data="loved_manage")],
+        [InlineKeyboardButton(text="🕊️ Мои близкие", callback_data="loved_ones")],
+    ]))
 
 
 @dp.callback_query(F.data == "make_zapiska")
@@ -6723,6 +6851,7 @@ async def main():
     init_db()
     TELEGRAM_HEARTBEAT_FILE.touch(exist_ok=True)
     asyncio.create_task(telegram_heartbeat_loop())
+    asyncio.create_task(loved_ones_reminder_loop_tg())
     asyncio.create_task(asyncio.to_thread(ensure_review_sheet_schema_tg))
     asyncio.create_task(channel_scheduler_supervisor())
     asyncio.create_task(channel_watchdog_loop())
