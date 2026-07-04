@@ -1423,7 +1423,11 @@ def _ensure_compact_sheet(sp, title):
     try:
         sheet = sp.worksheet(title)
     except Exception:
-        sheet = sp.add_worksheet(title=title, rows=2000, cols=len(COMPACT_SHEET_HEADERS))
+        try:
+            sheet = sp.add_worksheet(title=title, rows=2000, cols=len(COMPACT_SHEET_HEADERS))
+        except Exception:
+            # Другой процесс мог создать лист между проверкой и add_worksheet.
+            sheet = sp.worksheet(title)
     old = sheet.get_all_values()
     if not old or old[0] != COMPACT_SHEET_HEADERS:
         migrated = []
@@ -6702,9 +6706,23 @@ async def handle_text(message: Message):
     # Если шаг не определён — показать меню
     await message.answer("☦️ Главное меню:", reply_markup=main_menu())
 
+# ========== ВНЕШНИЙ HEARTBEAT ДЛЯ WATCHDOG ==========
+TELEGRAM_HEARTBEAT_FILE = Path("/tmp/vera_telegram.heartbeat")
+
+async def telegram_heartbeat_loop():
+    """Обновляет внешний heartbeat, который проверяет vera-watchdog."""
+    while True:
+        try:
+            TELEGRAM_HEARTBEAT_FILE.touch(exist_ok=True)
+        except Exception as e:
+            logging.error(f"Ошибка heartbeat Telegram: {e}")
+        await asyncio.sleep(30)
+
 # ========== MAIN ==========
 async def main():
     init_db()
+    TELEGRAM_HEARTBEAT_FILE.touch(exist_ok=True)
+    asyncio.create_task(telegram_heartbeat_loop())
     asyncio.create_task(asyncio.to_thread(ensure_review_sheet_schema_tg))
     asyncio.create_task(channel_scheduler_supervisor())
     asyncio.create_task(channel_watchdog_loop())
