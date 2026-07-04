@@ -4628,9 +4628,8 @@ def spawn_background(coro):
 
 @app.on_event("startup")
 async def startup():
-    asyncio.create_task(max_heartbeat_loop())
-    asyncio.create_task(loved_ones_reminder_loop_max())
     """Инициализирует БД, webhook и все постоянные фоновые процессы."""
+    spawn_background(loved_ones_reminder_loop_max())
     init_db()
     await register_webhook()
     MAX_HEARTBEAT_FILE.touch(exist_ok=True)
