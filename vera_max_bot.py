@@ -371,6 +371,7 @@ def main_menu_buttons():
         [btn("👤 Мой профиль", "profile"), btn("❓ Задать вопрос", "ask_question")],
         [btn("🕯️ Пожертвование на развитие", "donate")],
         [btn("💬 Отзыв или пожелание", "review")],
+        [btn("🛠 Сообщить о проблеме", "report_problem")],
         [btn("🤝 Пригласить близкого", "invite_friend")],
     ]
 
@@ -2903,6 +2904,17 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
             back_main()
         )
 
+    elif payload == "report_problem":
+        set_step(user_id, "report_problem")
+        await send_message(
+            chat_id,
+            "🛠 Сообщить о проблеме\n\n"
+            "Если какая-то кнопка не работает, появилась ошибка или помощник отвечает неправильно — опишите, пожалуйста, что произошло.\n\n"
+            "Укажите, какую кнопку нажимали и что увидели после этого.\n\n"
+            "✏️ Напишите сообщение текстом 👇",
+            back_main(),
+        )
+
     else:
         await send_message(chat_id, "☦️ Главное меню:", main_menu_buttons())
 
@@ -3328,6 +3340,37 @@ async def handle_text(chat_id, user_id, text, first_name=""):
             [[btn("✍️ Ещё записку", "make_zapiska")],
              [btn("📝 Как подавать", "sacr_zapiska"), btn("🏠 Меню", "main_menu")]]
         )
+        return
+
+    if step == "report_problem":
+        problem_text = (text or "").strip()
+        if not problem_text:
+            await send_message(chat_id, "⚠️ Сообщение пустое. Опишите, пожалуйста, что произошло.", back_main())
+            return
+        user_data = get_user(user_id)
+        username = user_data.get("username", "") or "—"
+        saved_name = user_data.get("church_name") or user_data.get("first_name") or first_name or "—"
+        now_text = datetime.now().strftime("%d.%m.%Y %H:%M")
+        owner_text = (
+            "🚨 Новая проблема в «С верой»\n\n"
+            "Платформа: MAX\n"
+            f"Имя: {saved_name}\n"
+            f"Username: {username}\n"
+            f"ID пользователя: {user_id}\n"
+            f"Дата и время: {now_text}\n\n"
+            f"Описание:\n{problem_text[:2800]}"
+        )
+        result = await send_message(OWNER_ID, owner_text)
+        if result:
+            set_step(user_id, "idle")
+            track_attributed_event(user_id, "MAX", "problem_reported", target="support")
+            await send_message(
+                chat_id,
+                "✅ Спасибо, сообщение отправлено.\n\nМы проверим проблему и постараемся исправить её как можно скорее.",
+                main_menu_buttons(),
+            )
+        else:
+            await send_message(chat_id, "⚠️ Не удалось отправить сообщение. Попробуйте ещё раз немного позже.", back_main())
         return
 
     if step == "review":

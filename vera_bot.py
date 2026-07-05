@@ -3235,6 +3235,9 @@ def main_menu():
         [
             InlineKeyboardButton(text="💬 Отзыв или пожелание по улучшению", callback_data="review"),
         ],
+        [
+            InlineKeyboardButton(text="🛠 Сообщить о проблеме", callback_data="report_problem"),
+        ],
         [InlineKeyboardButton(text="🤝 Пригласить близкого", callback_data="invite_friend")],
     ])
 
@@ -6132,6 +6135,52 @@ async def cb_fav_view(callback: CallbackQuery):
     await callback.answer()
 
 # ========== ОТЗЫВЫ ==========
+@dp.callback_query(F.data == "report_problem")
+async def cb_report_problem(callback: CallbackQuery):
+    set_step(callback.from_user.id, "report_problem")
+    await callback.message.answer(
+        "🛠 *Сообщить о проблеме*\n\n"
+        "Если какая-то кнопка не работает, появилась ошибка или помощник отвечает неправильно — опишите, пожалуйста, что произошло.\n\n"
+        "Укажите, какую кнопку нажимали и что увидели после этого.\n\n"
+        "✏️ Напишите сообщение текстом 👇",
+        parse_mode="Markdown",
+        reply_markup=back_menu(),
+    )
+    await callback.answer()
+
+
+async def process_problem_report_tg(message: Message, problem_text: str):
+    problem_text = (problem_text or "").strip()
+    if not problem_text:
+        await message.answer("⚠️ Сообщение пустое. Опишите, пожалуйста, что произошло.", reply_markup=back_menu())
+        return
+    username = f"@{message.from_user.username}" if message.from_user.username else "—"
+    now_text = datetime.now().strftime("%d.%m.%Y %H:%M")
+    owner_text = (
+        "🚨 Новая проблема в «С верой»\n\n"
+        "Платформа: Telegram\n"
+        f"Имя: {message.from_user.first_name or '—'}\n"
+        f"Username: {username}\n"
+        f"ID пользователя: {message.from_user.id}\n"
+        f"Дата и время: {now_text}\n\n"
+        f"Описание:\n{problem_text[:3000]}"
+    )
+    try:
+        await bot.send_message(OWNER_ID, owner_text)
+        set_step(message.from_user.id, "idle")
+        track_attributed_event(message.from_user.id, "Telegram", "problem_reported", target="support")
+        await message.answer(
+            "✅ Спасибо, сообщение отправлено.\n\nМы проверим проблему и постараемся исправить её как можно скорее.",
+            reply_markup=main_menu(),
+        )
+    except Exception as e:
+        logging.error(f"Не удалось отправить сообщение о проблеме владельцу: {e}")
+        await message.answer(
+            "⚠️ Не удалось отправить сообщение. Попробуйте ещё раз немного позже.",
+            reply_markup=back_menu(),
+        )
+
+
 @dp.callback_query(F.data == "review")
 async def cb_review(callback: CallbackQuery):
     set_step(callback.from_user.id, "review")
@@ -6731,6 +6780,10 @@ async def handle_text(message: Message):
 
     if step == "review":
         await process_new_review(message, text)
+        return
+
+    if step == "report_problem":
+        await process_problem_report_tg(message, text)
         return
 
     # Пожертвование — ввод суммы
