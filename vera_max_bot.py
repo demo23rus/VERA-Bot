@@ -3940,6 +3940,101 @@ def _split_readable_paragraphs(paragraphs, max_paragraph_len: int = 330):
     return result
 
 
+CHANNEL_ADDRESS_VARIANTS = (
+    "Дорогие братья и сестры,",
+    "Дорогие друзья,",
+    "Родные во Христе,",
+    "Братья и сестры,",
+    "Дорогие читатели,",
+)
+
+CHANNEL_FORBIDDEN_SNIPPETS = (
+    "утро — время", "утро - время", "утро – время",
+    "вечер — время", "вечер - время", "вечер – время",
+    "назовите три", "назови три", "три вещи", "мы просыпаемся и сразу",
+)
+
+CHANNEL_SECOND_PERSON_TOKENS = (
+    " ты ", " тебя ", " тебе ", " тобой ", " твой ", " твоя ",
+    " твоё ", " твое ", " твои ", " твоих ", " твоим ", " твою ",
+)
+
+
+def _normalized_channel_text(text: str) -> str:
+    return " ".join((text or "").lower().replace("ё", "е").split())
+
+
+def _channel_address_variant(cta_key: str, rubric: str, seed_text: str = "") -> str:
+    seed = f"{cta_key}|{rubric}|{seed_text[:80]}"
+    idx = sum(ord(ch) for ch in seed) % len(CHANNEL_ADDRESS_VARIANTS)
+    return CHANNEL_ADDRESS_VARIANTS[idx]
+
+
+def _channel_has_address(text: str) -> bool:
+    normalized = _normalized_channel_text(text)
+    return any(addr.lower().replace("ё", "е").rstrip(",") in normalized for addr in CHANNEL_ADDRESS_VARIANTS)
+
+
+def _channel_has_forbidden_snippet(text: str) -> bool:
+    normalized = _normalized_channel_text(text)
+    return any(snippet in normalized for snippet in CHANNEL_FORBIDDEN_SNIPPETS)
+
+
+def _channel_has_second_person(text: str) -> bool:
+    normalized = " " + re.sub(r"[^a-zа-яё0-9 ]+", " ", (text or "").lower()) + " "
+    return any(token in normalized for token in CHANNEL_SECOND_PERSON_TOKENS)
+
+
+def _channel_looks_truncated(text: str) -> bool:
+    stripped = (text or "").strip()
+    if not stripped:
+        return True
+    if re.search(r"\n\d+\s*$", stripped):
+        return True
+    if stripped.endswith(("…", "...", "…»", '…”', '..."')):
+        return False
+    return stripped[-1] not in ".!?…»\""
+
+
+def _channel_post_is_valid(text: str, cta_key: str) -> bool:
+    if len((text or "").strip()) < 80:
+        return False
+    if _channel_has_forbidden_snippet(text):
+        return False
+    if _channel_has_second_person(text):
+        return False
+    if _channel_looks_truncated(text):
+        return False
+    if cta_key in ("morning", "evening") and not _channel_has_address(text):
+        return False
+    return True
+
+
+def _inject_channel_address(title: str, body_paragraphs, cta_key: str, rubric: str):
+    if cta_key not in ("morning", "evening"):
+        return body_paragraphs
+    joined = "\n".join(body_paragraphs[:2])
+    if _channel_has_address(joined):
+        return body_paragraphs
+    return [_channel_address_variant(cta_key, rubric, title)] + body_paragraphs
+
+
+def compose_channel_publication_text(body_text: str, footer_text: str, limit: int) -> str:
+    body = clean_channel_markup(body_text)
+    footer = clean_channel_markup(footer_text).strip()
+    separator = "\n\n─────────────────\n"
+    extra = len(separator) + len(footer) if footer else 0
+    allowed = max(120, limit - extra)
+    safe_body = _shorten_at_sentence(body, allowed)
+    final = f"{safe_body}{separator}{footer}" if footer else safe_body
+    final = re.sub(r"\n\d+\s*$", "", final).strip()
+    if len(final) > limit:
+        safe_body = _shorten_at_sentence(body, max(120, allowed - 40))
+        final = f"{safe_body}{separator}{footer}" if footer else safe_body
+        final = re.sub(r"\n\d+\s*$", "", final).strip()
+    return final
+
+
 def polish_channel_text(
     text: str,
     cta_key: str,
@@ -3964,8 +4059,7 @@ def polish_channel_text(
     if not title:
         title = fallback_title
 
-    # Не позволяем модели превращать заголовок в назидательную длинную фразу.
-    if len(title) > 92:
+    if len(title) > 92 or _channel_has_forbidden_snippet(title):
         title = fallback_title
     title = title.strip(" —–-:;,.\"«»")
     emoji = CHANNEL_TITLE_EMOJI.get(cta_key, "☦️")
@@ -3973,7 +4067,7 @@ def polish_channel_text(
         title = f"{emoji} {title}"
 
     body_paragraphs = _split_readable_paragraphs(body_paragraphs)
-    # Заголовок + максимум пять коротких смысловых абзацев.
+    body_paragraphs = _inject_channel_address(title, body_paragraphs, cta_key, rubric)
     body_paragraphs = body_paragraphs[:5]
     if not body_paragraphs and cleaned:
         source = cleaned
@@ -3981,6 +4075,7 @@ def polish_channel_text(
             source = source[len(title.replace(f"{emoji} ", "")):].lstrip(" .:—-\n")
         if source:
             body_paragraphs = _split_readable_paragraphs([source])[:5]
+            body_paragraphs = _inject_channel_address(title, body_paragraphs, cta_key, rubric)
 
     result = title
     if body_paragraphs:
@@ -3991,17 +4086,18 @@ def polish_channel_text(
     else:
         max_chars = 1180 if has_visual else 1350
     result = _shorten_at_sentence(result, max_chars)
+    result = re.sub(r"\n\d+\s*$", "", result).strip()
     return clean_channel_markup(result)
 
 
 FALLBACK_POSTS = {
-    "morning": "🌅 Господи, благослови наступающий день. Даруй нам мир в сердце, мудрость в словах и силы делать добро. Помоги не осуждать, не унывать и помнить о Тебе в каждом деле. Аминь.",
+    "morning": "Доброе начало дня\n\nДорогие братья и сестры,\n\nпусть это утро начнётся с короткой молитвы и спокойной памяти о Боге. Новый день дан нам не для суеты и раздражения, а для добрых слов, верности в малом и мирного сердца.\n\nПопросим Господа укрепить нас в делах, сохранить от поспешных слов и помочь не пройти мимо человека, которому сегодня нужна поддержка.\n\nПусть этот день будет прожит с благодарностью, терпением и надеждой на Божию помощь.",
     "quote": "✝️ Мир в душе начинается с внимания к собственному сердцу. Прежде чем осудить другого, остановимся и попросим у Бога кротости и рассудительности.",
     "saint": "👼 Святитель Лука Крымский был хирургом и архиереем. Даже в годы ссылок он продолжал лечить людей и сохранять верность своему служению. Его пример напоминает: вера не уводит от ответственности, а помогает честно делать необходимое для другого человека.",
     "guidance": "🕯️ Когда молитва не идёт, не нужно отчаиваться. Скажите Богу несколько простых слов своими словами и останьтесь в тишине. Верность важнее сильных чувств.",
     "practical": "⛪ Первый шаг в храме не требует идеальной подготовки. Придите немного заранее, встаньте там, где удобно, и спокойно наблюдайте за службой. Если что-то непонятно, после богослужения можно вежливо спросить служителя храма.",
     "story": "👼 После личной трагедии преподобномученица Елисавета Феодоровна посвятила себя помощи больным и бедным. Её история показывает: боль может не только замкнуть сердце, но и стать началом деятельного милосердия.",
-    "evening": "🌙 Господи, благодарю Тебя за прошедший день. Прости всё, чем я согрешил словом, делом и мыслью. Сохрани моих близких и даруй нам мирный сон. Аминь.",
+    "evening": "Тихий итог дня\n\nДорогие братья и сестры,\n\nк вечеру особенно важно остановиться, поблагодарить Бога за прожитый день и отпустить всё лишнее, что тревожит сердце. Не всё получилось так, как хотелось, но каждый день можно завершить с миром и надеждой.\n\nПопросим у Господа прощения за ошибки, помолимся о близких и передадим Богу всё, что не можем исправить прямо сейчас.\n\nПусть эта ночь принесёт покой душе, а завтрашний день станет новым тихим шансом на добро.",
     "qa": "❓ Можно ли молиться своими словами? Да. Церковные молитвы учат нас, но Господь слышит и искреннее обращение сердца. Говорите просто, честно и с доверием.",
     "life": "📖 Праведный Иоанн Кронштадтский не ограничивался словами о сострадании: он посещал бедные семьи и помогал создавать возможность для труда. Его пример задаёт простой вопрос: во что сегодня может превратиться наше сочувствие?",
     "film": "📽️ Для семейного просмотра выберите проверенный документальный фильм о православных святынях или истории монастыря. После просмотра обсудите, какая мысль особенно затронула каждого.",
@@ -4014,72 +4110,135 @@ FALLBACK_POSTS = {
 }
 
 
+MORNING_WEEKDAY_PROMPTS = {
+    0: "Напиши тёплую утреннюю православную публикацию на {day} о начале новой недели, просьбе к Богу о силах и мирном сердце среди дел.",
+    1: "Напиши тёплую утреннюю православную публикацию на {day} о терпении, бережном отношении к людям и спокойных словах в течение дня.",
+    2: "Напиши тёплую утреннюю православную публикацию на {day} о благодарности Богу за новый день без шаблонных упражнений и психологических клише.",
+    3: "Напиши тёплую утреннюю православную публикацию на {day} о мудрости в решениях, внимании к совести и памяти о Боге в обычных делах.",
+    4: "Напиши тёплую утреннюю православную публикацию на {day} о внутреннем мире, преодолении раздражения и добром отношении к ближним.",
+    5: "Напиши тёплую утреннюю православную публикацию на {day} о семье, заботе о близких и тихом домашнем добре.",
+    6: "Напиши тёплую утреннюю православную публикацию на {day} о воскресной тишине, молитве, храме и мире в душе.",
+}
+
+EVENING_WEEKDAY_PROMPTS = {
+    0: "Напиши тёплую вечернюю православную публикацию на {day} о завершении дня без суеты, доверии Богу и спокойном отдыхе.",
+    1: "Напиши тёплую вечернюю православную публикацию на {day} о примирении, умении попросить прощения и не уносить обиду в ночь.",
+    2: "Напиши тёплую вечернюю православную публикацию на {day} о том, как принести Богу дневную усталость и попросить душевного мира.",
+    3: "Напиши тёплую вечернюю православную публикацию на {day} о молитве за близких перед сном и тихой благодарности за прожитый день.",
+    4: "Напиши тёплую вечернюю православную публикацию на {day} о благодарности за неделю, прощении и надежде на Божию помощь.",
+    5: "Напиши тёплую вечернюю православную публикацию на {day} о семейном мире, домашней тишине и краткой молитве перед сном.",
+    6: "Напиши тёплую вечернюю православную публикацию на {day} о воскресном подведении итогов, доверии Богу и мирном сне.",
+}
+
+
+def morning_channel_prompt(msk_now: datetime) -> str:
+    weekday = msk_now.weekday()
+    day = msk_now.strftime("%d.%m")
+    return MORNING_WEEKDAY_PROMPTS[weekday].format(day=day)
+
+
+def evening_channel_prompt(msk_now: datetime) -> str:
+    weekday = msk_now.weekday()
+    day = msk_now.strftime("%d.%m")
+    return EVENING_WEEKDAY_PROMPTS[weekday].format(day=day)
+
+
 async def generate_channel_post(prompt, cta_key, rubric, visual_prompt_note="", visual_title="", source_override=""):
     history = recent_channel_topics(35)
     history_note = f"\n\nНе повторяй эти недавние темы:\n{history}" if history else ""
     visual_note = f"\n\n{visual_prompt_note}" if visual_prompt_note else ""
-    length_rule = "700–1050" if visual_prompt_note else "850–1250"
-    full_prompt = (
-        prompt + visual_note + history_note +
-        f"\nНапиши редакционный пост объёмом {length_rule} символов. "
-        "Первая строка — мягкий живой заголовок до 70 символов. "
-        "Затем 3–5 коротких абзацев: одна понятная мысль, один жизненный пример и практический вывод. "
-        "Не используй Markdown, звёздочки, решётки, обратные кавычки, ссылки и хэштеги. "
-        "Не пиши стену текста и не повторяй одинаковые вступления."
-    )
-    try:
-        msg = await asyncio.wait_for(
-            asyncio.to_thread(
-                claude_client.messages.create,
-                model="claude-sonnet-4-5",
-                max_tokens=500,
-                system=(
-                    "Ты редактор премиального православного медиа. Пиши тепло, спокойно, человечно и без назидательного тона. "
-                    "Опирайся на православную традицию. Не представляйся священником, не давай личных благословений, "
-                    "не выдумывай цитаты, факты, чудеса, фильмы или церковные правила. "
-                    "Каждый абзац должен быть коротким и легко читаться с телефона. "
-                    "Не добавляй рекламу: компактный CTA добавит программа. Не используй Markdown-разметку."
-                ),
-                messages=[{"role": "user", "content": full_prompt}],
-            ),
-            timeout=45,
+    length_rule = "620–860" if visual_prompt_note else "820–1120"
+    special_rules = ""
+    if cta_key in ("morning", "evening"):
+        special_rules = (
+            "\nОбязательно обратись к читателям одним из вариантов: «Дорогие братья и сестры», «Дорогие друзья», «Родные во Христе», «Братья и сестры» или «Дорогие читатели»."
+            " Не начинай текст или заголовок словами «Утро — время» и «Вечер — время»."
+            " Не проси читателей назвать три вещи и не используй фразу «мы просыпаемся и сразу»."
+            " Не обращайся к читателю на «ты» — только «мы» или «вы»."
+            " Избегай обобщений про монастыри и не делай текст похожим на психологическую заметку."
         )
-        text = msg.content[0].text.strip()
-        if len(text) < 60:
-            raise RuntimeError("AI вернул слишком короткий текст")
-    except Exception as e:
-        logging.error(f"Канал: генерация {rubric} не удалась, используется fallback: {e}")
-        text = FALLBACK_POSTS.get(cta_key, FALLBACK_POSTS["guidance"])
-
-    text = polish_channel_text(
-        text, cta_key, rubric,
-        has_visual=bool(visual_prompt_note or visual_title),
-        platform="max",
+    system_prompt = (
+        "Ты редактор премиального православного медиа. Пиши тепло, спокойно, человечно и без назидательного тона. "
+        "Опирайся на православную традицию. Не представляйся священником, не давай личных благословений, "
+        "не выдумывай цитаты, факты, чудеса, фильмы или церковные правила. "
+        "Каждый абзац должен быть коротким и легко читаться с телефона. "
+        "Не добавляй рекламу: компактный CTA добавит программа. Не используй Markdown-разметку."
     )
+
+    validation_notes = [
+        "",
+        "\nПредыдущий вариант нарушил редакционные правила. Сформулируй по-другому, без шаблонов и с живым обращением к людям.",
+        "\nЭто последняя попытка. Нужен тёплый церковный текст без повторяющихся формул, с законченной последней фразой и без обрыва мысли.",
+    ]
+    last_error = ""
+
+    for attempt in range(3):
+        full_prompt = (
+            prompt + visual_note + history_note + special_rules + validation_notes[attempt] +
+            f"\nНапиши редакционный пост объёмом {length_rule} символов. "
+            "Первая строка — мягкий живой заголовок до 70 символов. "
+            "Затем 3–5 коротких абзацев: одна понятная мысль, один жизненный пример и практический вывод. "
+            "Не используй Markdown, звёздочки, решётки, обратные кавычки, ссылки и хэштеги. "
+            "Не пиши стену текста, не повторяй одинаковые вступления и закончи текст полной завершённой фразой."
+        )
+        try:
+            msg = await asyncio.wait_for(
+                asyncio.to_thread(
+                    claude_client.messages.create,
+                    model="claude-sonnet-4-5",
+                    max_tokens=520,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": full_prompt}],
+                ),
+                timeout=45,
+            )
+            raw_text = msg.content[0].text.strip()
+            if len(raw_text) < 60:
+                raise RuntimeError("AI вернул слишком короткий текст")
+            post_text = polish_channel_text(
+                raw_text, cta_key, rubric,
+                has_visual=bool(visual_prompt_note or visual_title),
+                platform="max",
+            )
+            if _channel_post_is_valid(post_text, cta_key):
+                break
+            last_error = "не прошёл редакционную проверку"
+            logging.warning(f"Канал MAX: пост для {rubric} отклонён на попытке {attempt + 1}")
+        except Exception as e:
+            last_error = str(e)
+            logging.error(f"Канал MAX: генерация {rubric} не удалась на попытке {attempt + 1}: {e}")
+    else:
+        fallback_text = FALLBACK_POSTS.get(cta_key, FALLBACK_POSTS["guidance"])
+        post_text = polish_channel_text(
+            fallback_text, cta_key, rubric,
+            has_visual=bool(visual_prompt_note or visual_title),
+            platform="max",
+        )
+        logging.warning(f"Канал MAX: используется fallback для {rubric}: {last_error}")
+
     footer, buttons, deep_link = get_channel_cta(cta_key, source_override)
-    return text + footer, buttons, deep_link, extract_topic(text)
+    final_text = compose_channel_publication_text(post_text, footer.strip(), 3950)
+    return final_text, buttons, deep_link, extract_topic(post_text)
 
 
 def build_daily_slots(msk_now: datetime):
-    day = msk_now.strftime("%d.%m")
     weekday = msk_now.weekday()
     midday_rotation = {
         0: ("церковное слово", "practical", "Объясни один церковный термин простыми словами. Не выдумывай происхождение или правила."),
-        1: ("вопрос новичка", "qa", "Разбери один частый вопрос начинающего. Отделяй общецерковную норму от приходской практики."),
+        1: ("вопрос новичка", "qa", "Разбери частый вопрос начинающего. Отделяй общецерковную норму от приходской практики."),
         2: ("история святого", "story", saint_story_prompt(msk_now, offset=5, format_kind="episode")),
         3: ("храм и традиция", "church", "Объясни одну православную традицию без категоричных указаний и напомни, что местная практика может отличаться."),
-        4: ("подготовка к Таинству", "practical", "Дай общую бережную памятку и обязательно предложи уточнить правила у священника своего прихода."),
+        4: ("подготовка к Таинству", "practical", "Дай общую бережную памятку и предложи уточнить правила у священника своего прихода."),
         5: ("житие и пример", "story", saint_story_prompt(msk_now, offset=9, format_kind="weekend")),
         6: ("воскресное размышление", "gospel", "Раскрой одну евангельскую мысль для семейного разговора. Не называй её богослужебным чтением дня."),
     }
     midday = midday_rotation[weekday]
     return [
-        (7, "утренняя молитва", "morning", f"Короткая утренняя публикация на {day}: благодарность и один спокойный настрой на день."),
+        (7, "утренняя молитва", "morning", morning_channel_prompt(msk_now)),
         (9, "святой или праздник дня", "saint", "__DYNAMIC_SAINT__"),
         (13, midday[0], midday[1], midday[2]),
-        (20, "вечерняя молитва", "evening", "Короткая вечерняя публикация: благодарность, просьба о прощении и мирном сне."),
+        (20, "вечерняя молитва", "evening", evening_channel_prompt(msk_now)),
     ]
-
 
 
 # Проверенная редакционная библиотека для постов о святых.
