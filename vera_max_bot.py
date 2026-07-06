@@ -165,215 +165,192 @@ async def register_webhook():
     logging.info(f"Webhook регистрация: {result}")
 
 
-# ========== GOOGLE SHEETS ==========
+# ========== GOOGLE SHEETS — КОМПАКТНАЯ КНИГА ==========
+COMPACT_SHEET_HEADERS = ["Дата", "ID", "Пользователь", "Клики", "Отзыв", "Предложение", "Пожертвование"]
+COMPACT_SHEET_TG = "Вера ТГ"
+COMPACT_SHEET_MAX = "Вера MAX"
+
+
 def get_spreadsheet():
     if not SHEETS_AVAILABLE:
         return None
     try:
         scopes = ["https://www.googleapis.com/auth/spreadsheets"]
-        creds  = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
-        client = gspread.authorize(creds)
-        return client.open_by_key(SPREADSHEET_ID)
+        creds = Credentials.from_service_account_file(CREDENTIALS_FILE, scopes=scopes)
+        return gspread.authorize(creds).open_by_key(SPREADSHEET_ID)
     except Exception as e:
         logging.error(f"Sheets connect error: {e}")
         return None
 
-def sheets_add_user_max(user_id, username, first_name):
+
+def _ensure_compact_sheet_max(sp, title):
+    try:
+        sheet = sp.worksheet(title)
+    except Exception:
+        sheet = sp.add_worksheet(title=title, rows=2000, cols=len(COMPACT_SHEET_HEADERS))
+    old = sheet.get_all_values()
+    if not old or old[0] != COMPACT_SHEET_HEADERS:
+        migrated = []
+        for row in old[1:] if old else []:
+            if not row: continue
+            uid = (row[0] if len(row) > 0 else "").strip()
+            if not uid or not uid.lstrip('-').isdigit(): continue
+            username = row[1].strip() if len(row) > 1 else ""
+            name = row[2].strip() if len(row) > 2 else ""
+            person = " / ".join(x for x in (name, username) if x and x != "—") or "—"
+            date_value = ""
+            for idx in (4, 3):
+                if len(row) > idx and row[idx].strip(): date_value = row[idx].strip(); break
+            migrated.append([date_value or datetime.now().strftime("%d.%m.%Y %H:%M"), uid, person, "0", "", "", "0"])
+        sheet.clear(); sheet.resize(rows=max(2000, len(migrated)+20), cols=len(COMPACT_SHEET_HEADERS))
+        sheet.update(range_name=f"A1:G{len(migrated)+1}", values=[COMPACT_SHEET_HEADERS] + migrated)
+    return sheet
+
+
+def ensure_compact_workbook_max():
     try:
         sp = get_spreadsheet()
         if not sp: return
-        try:
-            sheet = sp.worksheet("С верой MAX")
-        except Exception:
-            sheet = sp.add_worksheet(title="С верой MAX", rows=2000, cols=8)
-            sheet.insert_row(["ID","Username","Имя","Дата регистрации","Последняя активность","Запросов AI","Отзывов","Пожертвований"], 1)
-        col = sheet.col_values(1)
-        if str(user_id) not in col:
-            sheet.append_row([
-                str(user_id),
-                f"@{username}" if username else "—",
-                first_name or "—",
-                datetime.now().strftime("%d.%m.%Y %H:%M"),
-                datetime.now().strftime("%d.%m.%Y %H:%M"),
-                "0", "0", "0"
-            ])
+        _ensure_compact_sheet_max(sp, COMPACT_SHEET_TG)
+        _ensure_compact_sheet_max(sp, COMPACT_SHEET_MAX)
+        for ws in list(sp.worksheets()):
+            if ws.title not in {COMPACT_SHEET_TG, COMPACT_SHEET_MAX}:
+                try: sp.del_worksheet(ws)
+                except Exception as e: logging.warning(f"Не удалось удалить лишний лист {ws.title}: {e}")
     except Exception as e:
-        logging.error(f"Sheets add_user_max: {e}")
+        logging.error(f"Google Sheets compact setup MAX: {e}")
+
+
+def _compact_user_label_max(username, first_name):
+    parts=[]
+    if first_name: parts.append(str(first_name))
+    if username: parts.append("@" + str(username).lstrip("@"))
+    return " / ".join(parts) or "—"
+
+
+def _compact_find_or_add_max(sheet, user_id, username="", first_name=""):
+    ids=sheet.col_values(2); uid=str(user_id)
+    if uid in ids:
+        row=ids.index(uid)+1
+        if username or first_name: sheet.update_cell(row,3,_compact_user_label_max(username,first_name))
+        sheet.update_cell(row,1,datetime.now().strftime("%d.%m.%Y %H:%M")); return row
+    sheet.append_row([datetime.now().strftime("%d.%m.%Y %H:%M"),uid,_compact_user_label_max(username,first_name),"0","","","0"])
+    return len(ids)+1
+
+
+def _max_sheet():
+    sp=get_spreadsheet()
+    return _ensure_compact_sheet_max(sp,COMPACT_SHEET_MAX) if sp else None
+
+
+def sheets_add_user_max(user_id, username, first_name):
+    try:
+        sheet=_max_sheet()
+        if sheet: _compact_find_or_add_max(sheet,user_id,username,first_name)
+    except Exception as e: logging.error(f"Sheets add_user_max: {e}")
+
 
 def sheets_update_activity_max(user_id):
     try:
-        sp = get_spreadsheet()
-        if not sp: return
-        sheet = sp.worksheet("С верой MAX")
-        col = sheet.col_values(1)
-        if str(user_id) in col:
-            row = col.index(str(user_id)) + 1
-            sheet.update_cell(row, 5, datetime.now().strftime("%d.%m.%Y %H:%M"))
-            ai_val = sheet.cell(row, 6).value or "0"
-            sheet.update_cell(row, 6, str(int(ai_val) + 1))
-    except Exception as e:
-        logging.error(f"Sheets update_activity_max: {e}")
-
-REVIEW_SHEET_HEADERS = [
-    "ID", "Username", "Имя", "Дата", "Отзыв",
-    "Номер отзыва", "Статус", "Ответ владельца", "Дата ответа", "Ответил"
-]
+        sheet=_max_sheet()
+        if sheet: _compact_find_or_add_max(sheet,user_id)
+    except Exception as e: logging.error(f"Sheets update_activity_max: {e}")
 
 
-def ensure_review_sheet(sp=None):
-    """Создаёт или обновляет лист отзывов до CRM-структуры."""
+def sheets_record_click_max(user_id):
     try:
-        sp = sp or get_spreadsheet()
-        if not sp:
-            return None
-        try:
-            sheet = sp.worksheet("Отзывы MAX")
-        except Exception:
-            sheet = sp.add_worksheet(
-                title="Отзывы MAX",
-                rows=1000,
-                cols=len(REVIEW_SHEET_HEADERS)
-            )
-        if getattr(sheet, "col_count", 0) < len(REVIEW_SHEET_HEADERS):
-            sheet.resize(cols=len(REVIEW_SHEET_HEADERS))
-        current_headers = sheet.row_values(1)
-        for index, header in enumerate(REVIEW_SHEET_HEADERS, start=1):
-            if len(current_headers) < index or current_headers[index - 1] != header:
-                sheet.update_cell(1, index, header)
-        return sheet
-    except Exception as e:
-        logging.error(f"ensure_review_sheet: {e}")
-        return None
+        sheet=_max_sheet()
+        if not sheet: return
+        row=_compact_find_or_add_max(sheet,user_id); value=sheet.cell(row,4).value or "0"
+        sheet.update_cell(row,4,str(int(value)+1))
+    except Exception as e: logging.error(f"Sheets record click MAX: {e}")
 
 
-def ensure_review_sheet_schema():
-    """Подготавливает столбцы листа отзывов при запуске."""
-    ensure_review_sheet()
+def _looks_like_suggestion_max(text):
+    low=(text or "").lower()
+    return any(x in low for x in ("предлага", "добавьте", "добавить", "не хватает", "хотелось", "улучш", "сделайте"))
 
 
 def sheets_add_review_max(review_id, user_id, username, first_name, text):
     try:
-        sp = get_spreadsheet()
-        if not sp:
-            return
-        sheet = ensure_review_sheet(sp)
-        if not sheet:
-            return
-        sheet.append_row([
-            str(user_id),
-            f"@{username}" if username else "—",
-            first_name or "—",
-            datetime.now().strftime("%d.%m.%Y %H:%M"),
-            text,
-            str(review_id),
-            "Новый",
-            "—",
-            "—",
-            "—"
-        ])
-        try:
-            main_sheet = sp.worksheet("С верой MAX")
-            col = main_sheet.col_values(1)
-            if str(user_id) in col:
-                row = col.index(str(user_id)) + 1
-                rev_val = main_sheet.cell(row, 7).value or "0"
-                main_sheet.update_cell(row, 7, str(int(rev_val) + 1))
-        except Exception:
-            pass
-    except Exception as e:
-        logging.error(f"sheets_add_review_max: {e}")
+        sheet=_max_sheet()
+        if not sheet: return
+        row=_compact_find_or_add_max(sheet,user_id,username,first_name)
+        col=6 if _looks_like_suggestion_max(text) else 5
+        old=sheet.cell(row,col).value or ""
+        new=(old+"\n" if old else "")+f"{datetime.now().strftime('%d.%m.%Y')}: {text.strip()}"
+        sheet.update_cell(row,col,new[:45000])
+    except Exception as e: logging.error(f"sheets_add_review_max: {e}")
 
 
-def sheets_update_review_max(
-    review_id,
-    status,
-    reply_text="",
-    replied_at="",
-    handled_by="Владелец"
-):
-    """Обновляет статус ответа. Повторяет поиск, если append ещё выполняется."""
-    import time
-    for attempt in range(1, 6):
-        try:
-            sp = get_spreadsheet()
-            if not sp:
-                return
-            sheet = ensure_review_sheet(sp)
-            if not sheet:
-                return
-            review_ids = sheet.col_values(6)
-            review_id_str = str(review_id)
-            if review_id_str in review_ids:
-                row = review_ids.index(review_id_str) + 1
-                sheet.update_cell(row, 7, status)
-                sheet.update_cell(row, 8, reply_text or "—")
-                sheet.update_cell(row, 9, replied_at or "—")
-                sheet.update_cell(row, 10, handled_by or "Владелец")
-                return
-            if attempt < 5:
-                time.sleep(2)
-        except Exception as e:
-            logging.error(f"sheets_update_review_max attempt {attempt}: {e}")
-            if attempt < 5:
-                time.sleep(2)
-    logging.warning(f"Отзыв #{review_id} не найден в Google Sheets после повторов")
+def sheets_update_review_max(*args, **kwargs): return None
 
+def sheets_update_latest_review_by_user(*args, **kwargs): return None
 
-def sheets_update_latest_review_by_user(
-    user_id,
-    status,
-    reply_text,
-    replied_at,
-    handled_by="Владелец"
-):
-    """Обновляет последний старый отзыв по ID пользователя, даже без номера отзыва."""
-    try:
-        sp = get_spreadsheet()
-        if not sp:
-            return
-        sheet = ensure_review_sheet(sp)
-        if not sheet:
-            return
-        user_ids = sheet.col_values(1)
-        target = str(user_id)
-        matching_rows = [i + 1 for i, value in enumerate(user_ids) if value == target]
-        if not matching_rows:
-            logging.warning(f"Отзывы пользователя {user_id} не найдены в Google Sheets")
-            return
-        row = matching_rows[-1]
-        sheet.update_cell(row, 7, status)
-        sheet.update_cell(row, 8, reply_text or "—")
-        sheet.update_cell(row, 9, replied_at or "—")
-        sheet.update_cell(row, 10, handled_by or "Владелец")
-    except Exception as e:
-        logging.error(f"sheets_update_latest_review_by_user: {e}")
+def ensure_review_sheet_schema(): ensure_compact_workbook_max()
+
 
 def sheets_add_donation(user_id, username, first_name, amount, source="MAX"):
     try:
-        sp = get_spreadsheet()
-        if not sp:
-            return False
-        try:
-            sheet = sp.worksheet("Пожертвования")
-        except Exception:
-            sheet = sp.add_worksheet(title="Пожертвования", rows=2000, cols=6)
-            sheet.insert_row(["ID","Username","Имя","Сумма (руб)","Дата","Источник"], 1)
-        sheet.append_row([str(user_id), f"@{username}" if username else "—", first_name or "—", str(amount), datetime.now().strftime("%d.%m.%Y %H:%M"), source])
-        if source == "MAX":
-            try:
-                main_sheet = sp.worksheet("С верой MAX")
-                col = main_sheet.col_values(1)
-                if str(user_id) in col:
-                    row = col.index(str(user_id)) + 1
-                    don_val = main_sheet.cell(row, 8).value or "0"
-                    main_sheet.update_cell(row, 8, str(int(don_val) + 1))
-            except Exception as e:
-                logging.warning(f"MAX donation counter not updated: {e}")
-        return True
+        sheet=_max_sheet()
+        if not sheet: return False
+        row=_compact_find_or_add_max(sheet,user_id,username,first_name)
+        current=sheet.cell(row,7).value or "0"
+        try: total=int(float(str(current).replace(" ","").replace(",",".")))
+        except Exception: total=0
+        sheet.update_cell(row,7,str(total+int(amount))); return True
     except Exception as e:
-        logging.error(f"Sheets add_donation: {e}")
-        return False
+        logging.error(f"Sheets add_donation: {e}"); return False
 
+# ========== МОИ БЛИЗКИЕ ==========
+def add_loved_one(user_id:int,name:str,kind:str,note:str="") -> int:
+    clean=" ".join((name or "").strip().split())[:120]
+    if not clean or kind not in {"health","repose"}: return 0
+    conn=db_connect(); cur=conn.execute("INSERT INTO loved_ones(user_id,name,kind,note,created_at) VALUES (?,?,?,?,?)",(int(user_id),clean,kind,(note or "")[:300],datetime.now().isoformat())); conn.commit(); rid=cur.lastrowid; conn.close(); return int(rid)
+
+def get_loved_ones(user_id:int):
+    conn=db_connect(); rows=conn.execute("SELECT id,name,kind,note FROM loved_ones WHERE user_id=? ORDER BY kind,id",(int(user_id),)).fetchall(); conn.close(); return rows
+
+def delete_loved_one(user_id:int,item_id:int)->bool:
+    conn=db_connect(); cur=conn.execute("DELETE FROM loved_ones WHERE id=? AND user_id=?",(int(item_id),int(user_id))); conn.commit(); ok=cur.rowcount>0; conn.close(); return ok
+
+def move_loved_one(user_id:int,item_id:int,new_kind:str)->bool:
+    if new_kind not in {"health","repose"}: return False
+    conn=db_connect(); cur=conn.execute("UPDATE loved_ones SET kind=? WHERE id=? AND user_id=?",(new_kind,int(item_id),int(user_id))); conn.commit(); ok=cur.rowcount>0; conn.close(); return ok
+
+def get_loved_reminders(user_id:int)->bool:
+    conn=db_connect(); row=conn.execute("SELECT reminders FROM loved_ones_settings WHERE user_id=?",(int(user_id),)).fetchone(); conn.close(); return bool(row and row[0])
+
+def set_loved_reminders(user_id:int,chat_id:int,enabled:bool):
+    conn=db_connect(); conn.execute("INSERT INTO loved_ones_settings(user_id,chat_id,reminders,last_sent_date) VALUES (?,?,?,'') ON CONFLICT(user_id) DO UPDATE SET chat_id=excluded.chat_id,reminders=excluded.reminders",(int(user_id),int(chat_id),1 if enabled else 0)); conn.commit(); conn.close()
+
+async def loved_ones_reminder_loop_max():
+    await asyncio.sleep(180)
+    while True:
+        try:
+            now=datetime.utcnow()+timedelta(hours=3)
+            if now.weekday()==6 and now.hour==10:
+                today=now.date().isoformat(); conn=db_connect(); rows=conn.execute("SELECT user_id,chat_id FROM loved_ones_settings WHERE reminders=1 AND COALESCE(last_sent_date,'')<>?",(today,)).fetchall(); conn.close()
+                for uid,cid in rows[:200]:
+                    try:
+                        await send_message(int(cid),"🕊️ Доброе напоминание: откройте список близких и помолитесь о тех, кто вам дорог.",[[btn("🕊️ Мои близкие","loved_ones")]])
+                        conn=db_connect(); conn.execute("UPDATE loved_ones_settings SET last_sent_date=? WHERE user_id=?",(today,int(uid))); conn.commit(); conn.close()
+                    except Exception as e: logging.warning(f"Loved ones reminder MAX {uid}: {e}")
+        except Exception as e: logging.error(f"Loved ones reminder loop MAX: {e}")
+        await asyncio.sleep(3600)
+
+def loved_ones_note_text(user_id:int,kind:str="") -> str:
+    rows=[r for r in get_loved_ones(user_id) if not kind or r[2]==kind]
+    if not rows:return "Список пока пуст."
+    parts=[]
+    for title,key in (("💛 О здравии","health"),("🕯️ Об упокоении","repose")):
+        names=[r[1] for r in rows if r[2]==key]
+        if names:parts.append(title+"\n"+"\n".join(f"• {n}" for n in names))
+    return "\n\n".join(parts)
+
+def loved_ones_zapiska_text(user_id:int,kind:str)->str:
+    names=[r[1] for r in get_loved_ones(user_id) if r[2]==kind][:10]
+    return (("О ЗДРАВИИ" if kind=="health" else "ОБ УПОКОЕНИИ")+"\n\n"+"\n".join(names)) if names else ""
 
 # ========== КНОПКИ ==========
 def btn(text, payload):
@@ -390,9 +367,11 @@ def main_menu_buttons():
         [btn("🏛️ Святыни", "holy_places"), btn("📚 Библиотека", "library")],
         [btn("📸 Узнать по фото", "photo_menu"), btn("🗺️ Храм рядом", "find_church")],
         [btn("📖 Евангельская мысль", "daily_gospel")],
+        [btn("🕊️ Мои близкие", "loved_ones")],
         [btn("👤 Мой профиль", "profile"), btn("❓ Задать вопрос", "ask_question")],
         [btn("🕯️ Пожертвование на развитие", "donate")],
         [btn("💬 Отзыв или пожелание", "review")],
+        [btn("🛠 Сообщить о проблеме", "report_problem")],
         [btn("🤝 Пригласить близкого", "invite_friend")],
     ]
 
@@ -973,6 +952,13 @@ def init_db():
         clicked_at TEXT NOT NULL
     )""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_channel_clicks_source ON channel_clicks(source)")
+    c.execute("""CREATE TABLE IF NOT EXISTS loved_ones (
+        id INTEGER PRIMARY KEY AUTOINCREMENT, user_id INTEGER NOT NULL,
+        name TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('health','repose')),
+        note TEXT DEFAULT '', created_at TEXT NOT NULL
+    )""")
+    c.execute("CREATE INDEX IF NOT EXISTS idx_loved_ones_user ON loved_ones(user_id,kind,id)")
+    c.execute("""CREATE TABLE IF NOT EXISTS loved_ones_settings (user_id INTEGER PRIMARY KEY, chat_id INTEGER DEFAULT 0, reminders INTEGER DEFAULT 0, last_sent_date TEXT DEFAULT '')""")
     c.execute("CREATE INDEX IF NOT EXISTS idx_channel_posts_date ON channel_posts(post_date)")
     # Отзывы и ответы владельца.
     c.execute("""CREATE TABLE IF NOT EXISTS user_reviews (
@@ -2383,6 +2369,7 @@ async def handle_start(chat_id, user_id, first_name, username, start_payload="")
         "ch_community": "ask_question",
     }
     if base_start_payload in {"ch_start60", "start60"}:
+        asyncio.create_task(asyncio.to_thread(sheets_record_click_max, user_id))
         track_funnel_event(user_id, "MAX", "channel_click", source=raw_start_payload or base_start_payload, target="quick_start")
         await handle_funnel_callback_max(chat_id, user_id, "quick_start", first_name)
         return
@@ -2396,6 +2383,7 @@ async def handle_start(chat_id, user_id, first_name, username, start_payload="")
             )
             conn.commit()
             conn.close()
+            asyncio.create_task(asyncio.to_thread(sheets_record_click_max, user_id))
         except Exception as e:
             logging.error(f"Не удалось записать переход из канала: {e}")
         actual_source = raw_start_payload or base_start_payload
@@ -2819,6 +2807,41 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
             back_main()
         )
 
+    elif payload == "loved_ones":
+        enabled=get_loved_reminders(user_id)
+        buttons=[[btn("🙏 О здравии","loved_view_health"),btn("🕯️ Об упокоении","loved_view_repose")],[btn("➕ Добавить человека","loved_add_choose")],[btn("📝 Собрать записку в храм","loved_note_choose")],[btn("🔔 Напоминания: включены" if enabled else "🔕 Напоминания: выключены","loved_reminders")],[btn("✏️ Изменить список","loved_manage")],[btn("🏠 Главное меню","main_menu")]]
+        await send_message(chat_id,"🕊️ Мои близкие\n\nСохраняйте имена близких, готовьте записки в храм и держите важные имена рядом.\n\nИмена видны только вам.",buttons)
+    elif payload in {"loved_view_health","loved_view_repose"}:
+        kind="health" if payload.endswith("health") else "repose"; title="🙏 О здравии" if kind=="health" else "🕯️ Об упокоении"
+        await send_message(chat_id,title+"\n\n"+loved_ones_note_text(user_id,kind),[[btn("➕ Добавить имя",f"loved_add_{kind}")],[btn("◀️ Назад","loved_ones")]])
+    elif payload == "loved_add_choose":
+        await send_message(chat_id,"Куда добавить имя?",[[btn("🙏 О здравии","loved_add_health")],[btn("🕯️ Об упокоении","loved_add_repose")],[btn("◀️ Назад","loved_ones")]])
+    elif payload in {"loved_add_health","loved_add_repose"}:
+        kind="health" if payload.endswith("health") else "repose"; set_step(user_id,f"loved_add_{kind}"); await send_message(chat_id,("🙏" if kind=="health" else "🕯️")+" Напишите одно имя. Лучше использовать церковную форму, если она известна.",[[btn("◀️ Назад","loved_ones")]])
+    elif payload == "loved_note_choose":
+        await send_message(chat_id,"Какую записку собрать?",[[btn("🙏 О здравии","loved_note_health")],[btn("🕯️ Об упокоении","loved_note_repose")],[btn("◀️ Назад","loved_ones")]])
+    elif payload in {"loved_note_health","loved_note_repose"}:
+        kind="health" if payload.endswith("health") else "repose"; note=loved_ones_zapiska_text(user_id,kind)
+        await send_message(chat_id,("📝 Готовая записка\n\n"+note+"\n\nПроверьте имена и уточните правила в своём храме.") if note else "Список пока пуст.",[[btn("🕊️ Мои близкие","loved_ones")],[btn("🏠 Главное меню","main_menu")]])
+    elif payload == "loved_reminders":
+        enabled=not get_loved_reminders(user_id); set_loved_reminders(user_id,chat_id,enabled); await send_message(chat_id,"✅ Еженедельное напоминание включено. Оно будет приходить по воскресеньям утром." if enabled else "🔕 Напоминания выключены.",[[btn("◀️ Назад","loved_ones")]])
+    elif payload == "loved_manage":
+        rows=get_loved_ones(user_id)
+        if not rows: await send_message(chat_id,"Список пока пуст.",[[btn("➕ Добавить человека","loved_add_choose")],[btn("◀️ Назад","loved_ones")]])
+        else:
+            buttons=[[btn(("🙏 " if kind=="health" else "🕯️ ")+name,f"loved_item:{item_id}")] for item_id,name,kind,_ in rows[:30]]; buttons.append([btn("◀️ Назад","loved_ones")]); await send_message(chat_id,"Выберите имя, которое нужно изменить:",buttons)
+    elif payload.startswith("loved_item:"):
+        item_id=int(payload.split(":",1)[1]); rows=[r for r in get_loved_ones(user_id) if r[0]==item_id]
+        if not rows: await send_message(chat_id,"Имя не найдено.")
+        else:
+            _,name,kind,_=rows[0]; other="repose" if kind=="health" else "health"; label="🕯️ Перенести в упокоение" if other=="repose" else "🙏 Перенести в здравие"; await send_message(chat_id,"✏️ "+name,[[btn(label,f"loved_move:{item_id}:{other}")],[btn("🗑️ Удалить",f"loved_del:{item_id}")],[btn("◀️ Назад","loved_manage")]])
+    elif payload.startswith("loved_move:"):
+        _,item_id,kind=payload.split(":",2); ok=move_loved_one(user_id,int(item_id),kind); await send_message(chat_id,"✅ Имя перенесено." if ok else "⚠️ Не удалось изменить запись.",[[btn("✏️ Изменить список","loved_manage")],[btn("🕊️ Мои близкие","loved_ones")]])
+    elif payload.startswith("loved_del:"):
+        try: ok=delete_loved_one(user_id,int(payload.split(":",1)[1]))
+        except Exception: ok=False
+        await send_message(chat_id,"✅ Имя удалено." if ok else "⚠️ Не удалось удалить имя.",[[btn("✏️ Изменить список","loved_manage")],[btn("🕊️ Мои близкие","loved_ones")]])
+
     elif payload == "make_zapiska":
         set_step(user_id, "zapiska_type")
         await send_message(chat_id,
@@ -2881,6 +2904,17 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
             back_main()
         )
 
+    elif payload == "report_problem":
+        set_step(user_id, "report_problem")
+        await send_message(
+            chat_id,
+            "🛠 Сообщить о проблеме\n\n"
+            "Если какая-то кнопка не работает, появилась ошибка или помощник отвечает неправильно — опишите, пожалуйста, что произошло.\n\n"
+            "Укажите, какую кнопку нажимали и что увидели после этого.\n\n"
+            "✏️ Напишите сообщение текстом 👇",
+            back_main(),
+        )
+
     else:
         await send_message(chat_id, "☦️ Главное меню:", main_menu_buttons())
 
@@ -2890,7 +2924,7 @@ def delete_user_data(user_id: int, platform: str):
     conn = db_connect()
     for table in (
         "favorites", "nurture_journeys", "funnel_events", "user_sessions",
-        "channel_clicks", "topic_votes", "limits", "subscriptions", "pending_payments",
+        "channel_clicks", "topic_votes", "limits", "subscriptions", "pending_payments", "loved_ones",
     ):
         try:
             conn.execute(f"DELETE FROM {table} WHERE user_id=?", (uid,))
@@ -3272,6 +3306,11 @@ async def handle_text(chat_id, user_id, text, first_name=""):
             await send_message(chat_id, "⚠️ Не удалось составить молитву. Попробуйте позже.", back_main())
         return
 
+    if step in {"loved_add_health", "loved_add_repose"}:
+        kind="health" if step.endswith("health") else "repose"; name=" ".join(text.strip().split())
+        if not name or len(name)>120: await send_message(chat_id,"⚠️ Напишите одно имя длиной до 120 символов.",back_main()); return
+        add_loved_one(user_id,name,kind); set_step(user_id,"idle"); await send_message(chat_id,f"✅ {name} добавлено в список {'о здравии' if kind=='health' else 'об упокоении'}.",[[btn("🕊️ Открыть список","loved_ones")],[btn("➕ Добавить ещё",f"loved_add_{kind}")],[btn("🏠 Главное меню","main_menu")]]); return
+
     if step == "zapiska_zdravie_names":
         set_step(user_id, "idle")
         names = [n.strip() for n in text.replace("\n", ",").split(",") if n.strip()]
@@ -3301,6 +3340,37 @@ async def handle_text(chat_id, user_id, text, first_name=""):
             [[btn("✍️ Ещё записку", "make_zapiska")],
              [btn("📝 Как подавать", "sacr_zapiska"), btn("🏠 Меню", "main_menu")]]
         )
+        return
+
+    if step == "report_problem":
+        problem_text = (text or "").strip()
+        if not problem_text:
+            await send_message(chat_id, "⚠️ Сообщение пустое. Опишите, пожалуйста, что произошло.", back_main())
+            return
+        user_data = get_user(user_id)
+        username = user_data.get("username", "") or "—"
+        saved_name = user_data.get("church_name") or user_data.get("first_name") or first_name or "—"
+        now_text = datetime.now().strftime("%d.%m.%Y %H:%M")
+        owner_text = (
+            "🚨 Новая проблема в «С верой»\n\n"
+            "Платформа: MAX\n"
+            f"Имя: {saved_name}\n"
+            f"Username: {username}\n"
+            f"ID пользователя: {user_id}\n"
+            f"Дата и время: {now_text}\n\n"
+            f"Описание:\n{problem_text[:2800]}"
+        )
+        result = await send_message(OWNER_ID, owner_text)
+        if result:
+            set_step(user_id, "idle")
+            track_attributed_event(user_id, "MAX", "problem_reported", target="support")
+            await send_message(
+                chat_id,
+                "✅ Спасибо, сообщение отправлено.\n\nМы проверим проблему и постараемся исправить её как можно скорее.",
+                main_menu_buttons(),
+            )
+        else:
+            await send_message(chat_id, "⚠️ Не удалось отправить сообщение. Попробуйте ещё раз немного позже.", back_main())
         return
 
     if step == "review":
@@ -4574,6 +4644,19 @@ async def channel_watchdog_loop():
 
 
 # ========== FASTAPI / LIFECYCLE ==========
+MAX_HEARTBEAT_FILE = Path("/tmp/vera_max.heartbeat")
+
+
+async def external_watchdog_heartbeat_loop():
+    """Обновляет heartbeat-файл для независимого systemd watchdog."""
+    while True:
+        try:
+            MAX_HEARTBEAT_FILE.touch(exist_ok=True)
+        except Exception as e:
+            logging.error(f"Не удалось обновить MAX heartbeat: {e}")
+        await asyncio.sleep(30)
+
+
 app = FastAPI(title="С верой — MAX", version="5.0.2")
 BACKGROUND_TASKS = set()
 
@@ -4589,8 +4672,11 @@ def spawn_background(coro):
 @app.on_event("startup")
 async def startup():
     """Инициализирует БД, webhook и все постоянные фоновые процессы."""
+    spawn_background(loved_ones_reminder_loop_max())
     init_db()
     await register_webhook()
+    MAX_HEARTBEAT_FILE.touch(exist_ok=True)
+    spawn_background(external_watchdog_heartbeat_loop())
     spawn_background(asyncio.to_thread(ensure_review_sheet_schema))
     spawn_background(channel_scheduler_supervisor())
     spawn_background(channel_watchdog_loop())
