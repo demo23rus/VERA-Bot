@@ -1,5 +1,6 @@
 import asyncio
 import importlib
+import sqlite3
 from datetime import date
 
 import pytest
@@ -76,6 +77,46 @@ class _HttpxClient:
 
 def _run(coro):
     return asyncio.run(coro)
+
+
+@pytest.mark.parametrize("module", [TG, MAX])
+@pytest.mark.parametrize(
+    ("dirty", "clean"),
+    [
+        ("Полезная мысль. Открой православного помощника.", "Полезная мысль."),
+        ("Полезная мысль\nОткройте помощника", "Полезная мысль"),
+        ("```\n«Полезная мысль»\n```", "Полезная мысль"),
+    ],
+)
+def test_sunday_companion_field_cleaner_is_narrow_and_symmetric(module, dirty, clean):
+    assert module.clean_sunday_companion_field(dirty) == clean
+    assert module.clean_sunday_companion_field("Внутри помощника можно помолиться.") == "Внутри помощника можно помолиться."
+
+
+@pytest.mark.parametrize("module", [TG, MAX])
+def test_sunday_cache_cleans_dirty_fields_without_fetch_or_generate(tmp_path, monkeypatch, module):
+    monkeypatch.setattr(module, "DB_PATH", str(tmp_path / f"{module.__name__}.db"))
+    module.init_db()
+    conn = sqlite3.connect(module.DB_PATH)
+    conn.execute(
+        "INSERT INTO sunday_companion "
+        "(sunday_date, gospel_ref, gospel_source, gospel_url, week_title, short_explanation, weekly_thought, small_step, prayer_note, generated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (SUNDAY.isoformat(), "Мк.8:34–9:1", SOURCE_URL, GOSPEL_URL, "Неделя",
+         "Текст. Открой православного помощника.", "Мысль", "Шаг", "Молитва", "now"),
+    )
+    conn.commit()
+    conn.close()
+
+    async def unexpected(*args):
+        raise AssertionError("cached Sunday content must not fetch or generate")
+
+    monkeypatch.setattr(module, "fetch_sunday_gospel_reading", unexpected)
+    monkeypatch.setattr(module, "generate_sunday_companion_explanation", unexpected)
+    result = _run(module.get_sunday_companion(SUNDAY))
+    assert result["short_explanation"] == "Текст."
+    assert "Открой" not in module.sunday_companion_text(SUNDAY, result)
+    assert "Короткая молитва (моя личная, не богослужебный текст):\nМолитва" in module.sunday_companion_text(SUNDAY, result)
 
 
 @pytest.mark.parametrize("module", [TG, MAX])

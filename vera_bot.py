@@ -1897,6 +1897,30 @@ SUNDAY_COMPANION_FALLBACK = {
     "prayer_note": "Господи, помоги мне услышать в этом чтении то, что важно именно сейчас.",
 }
 
+
+def clean_sunday_companion_field(text: str) -> str:
+    """Keep Sunday companion fields as plain prose and remove a trailing self-CTA."""
+    value = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    for _ in range(3):
+        value = re.sub(r"\A```(?:json|text|markdown)?\s*", "", value, flags=re.IGNORECASE)
+        value = re.sub(r"\s*```\Z", "", value)
+        value = value.strip("`").strip()
+        if len(value) >= 2 and value[0] in "«\"'“”" and value[-1] in "»\"'“”":
+            value = value[1:-1].strip()
+        updated = re.sub(
+            r"(?:\A|(?<=[.!?…])\s+|[—–-]\s+|\n+)"
+            r"(?:открой(?:те)?|открыть|перейдите?\s+[вк]|перейти\s+[вк]|зайдите?\s+в|зайти\s+в)\s+"
+            r"(?:православного\s+)?(?:помощника|ассистента)"
+            r"(?:\s*[.!?…]*)\s*\Z",
+            "",
+            value,
+            flags=re.IGNORECASE,
+        ).strip()
+        if updated == value:
+            break
+        value = updated
+    return value.strip()
+
 MY_SUNDAY_UNAVAILABLE_TEXT = "Не удалось загрузить чтение этого воскресенья. Попробуйте чуть позже."
 
 
@@ -1962,6 +1986,9 @@ async def generate_sunday_companion_explanation(sunday_date: date, reading: dict
         "Используй ТОЛЬКО это чтение — не заменяй и не придумывай другое. "
         "Напиши тёплый, спокойный, человеческий текст от автора православного проекта «С верой» "
         "(не от лица священника и не от лица духовника), без канцелярита и пафоса. "
+        "Не рекламируй себя и проект: не предлагай открыть, перейти или зайти в православного помощника/ассистента. "
+        "Не используй Markdown, кодовые блоки или обратные кавычки. Значения JSON — только обычная чистая проза, "
+        "без заголовков и подписей внутри значений и без декоративных кавычек вокруг текста. "
         "Ответь строго в формате JSON без каких-либо пояснений вокруг:\n"
         '{"short_explanation": "2-4 абзаца простым языком о смысле этого чтения",'
         ' "weekly_thought": "одна короткая мысль на неделю без морализаторства",'
@@ -1982,10 +2009,10 @@ async def generate_sunday_companion_explanation(sunday_date: date, reading: dict
     m = re.search(r'\{.*\}', text, re.S)
     data = json.loads(m.group(0) if m else text)
     return {
-        "short_explanation": str(data.get("short_explanation") or "").strip() or SUNDAY_COMPANION_FALLBACK["short_explanation"],
-        "weekly_thought": str(data.get("weekly_thought") or "").strip() or SUNDAY_COMPANION_FALLBACK["weekly_thought"],
-        "small_step": str(data.get("small_step") or "").strip() or SUNDAY_COMPANION_FALLBACK["small_step"],
-        "prayer_note": str(data.get("prayer_note") or "").strip() or SUNDAY_COMPANION_FALLBACK["prayer_note"],
+        "short_explanation": clean_sunday_companion_field(data.get("short_explanation")) or SUNDAY_COMPANION_FALLBACK["short_explanation"],
+        "weekly_thought": clean_sunday_companion_field(data.get("weekly_thought")) or SUNDAY_COMPANION_FALLBACK["weekly_thought"],
+        "small_step": clean_sunday_companion_field(data.get("small_step")) or SUNDAY_COMPANION_FALLBACK["small_step"],
+        "prayer_note": clean_sunday_companion_field(data.get("prayer_note")) or SUNDAY_COMPANION_FALLBACK["prayer_note"],
     }
 
 
@@ -2002,10 +2029,13 @@ async def get_sunday_companion(sunday_date: date) -> dict | None:
     row = c.fetchone()
     conn.close()
     if row:
-        return dict(zip(
+        result = dict(zip(
             ["gospel_ref", "gospel_source", "gospel_url", "week_title", "short_explanation", "weekly_thought", "small_step", "prayer_note"],
             row,
         ))
+        for field in ("short_explanation", "weekly_thought", "small_step", "prayer_note"):
+            result[field] = clean_sunday_companion_field(result[field])
+        return result
 
     reading = await fetch_sunday_gospel_reading(sunday_date)
     if not reading:
@@ -2018,6 +2048,8 @@ async def get_sunday_companion(sunday_date: date) -> dict | None:
         content = dict(SUNDAY_COMPANION_FALLBACK)
 
     result = {**reading, **content}
+    for field in ("short_explanation", "weekly_thought", "small_step", "prayer_note"):
+        result[field] = clean_sunday_companion_field(result.get(field)) or SUNDAY_COMPANION_FALLBACK[field]
     conn2 = db_connect()
     conn2.execute(
         "INSERT OR REPLACE INTO sunday_companion "
@@ -2039,10 +2071,10 @@ def sunday_companion_text(sunday_date: date, data: dict) -> str:
         "⛪ Моё воскресенье\n"
         f"{date_human}\n\n"
         f"📖 Евангелие этого воскресенья\n{data['gospel_ref']}{week_line}\n\n"
-        f"Коротко:\n{data['short_explanation']}\n\n"
-        f"Одна мысль на неделю:\n{data['weekly_thought']}\n\n"
-        f"Сегодня можно сделать:\n{data['small_step']}\n\n"
-        f"Короткая молитва (моя личная, не богослужебный текст):\n«{data['prayer_note']}»"
+        f"Коротко:\n{clean_sunday_companion_field(data['short_explanation'])}\n\n"
+        f"Одна мысль на неделю:\n{clean_sunday_companion_field(data['weekly_thought'])}\n\n"
+        f"Сегодня можно сделать:\n{clean_sunday_companion_field(data['small_step'])}\n\n"
+        f"Короткая молитва (моя личная, не богослужебный текст):\n{clean_sunday_companion_field(data['prayer_note'])}"
     )
 
 
