@@ -11,7 +11,6 @@
 - CURRENT: Normal product development through the economical Worker Router.
 
 ## NEXT
-- Manual live acceptance of «⛪ Моё воскресенье».
 - Continue subsequent product work through Router.
 
 ## DONE / CLOSED
@@ -22,6 +21,7 @@
 - «🕯️ Моя духовная неделя».
 - MAX real `chat_id` persistence for proactive messaging.
 - «⛪ Моё воскресенье» implementation in Telegram and MAX.
+- «⛪ Моё воскресенье» Telegram/MAX acceptance coverage and polling-recovery closure.
 - NGI Autonomous Development Standard v1 migration and economical Worker Router.
 - Telegram webhook/long-polling conflict resolution.
 

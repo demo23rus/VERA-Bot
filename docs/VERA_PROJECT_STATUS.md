@@ -32,8 +32,7 @@
 - Normal product development through the economical Worker Router with Coordinator narrow preflight.
 
 ## NEXT PRODUCT SLICE
-- Manual live acceptance of «⛪ Моё воскресенье».
-- Continue subsequent product work through Router.
+- Continue normal product work through Router.
 
 ## KNOWN TEST DEBT
 - No broad product test suite is required by default; use focused callback/business checks.
@@ -42,3 +41,4 @@
 ## CURRENT ACCEPTED PRODUCT BASELINES
 - Telegram + MAX assistants, owner cabinet, landing, analytics and current production features are accepted baseline unless a new reproducible defect is shown.
 - Recent accepted features include «🕯️ Моя духовная неделя» and «⛪ Моё воскресенье».
+- «⛪ Моё воскресенье» Telegram/MAX contract is focused-test accepted and DONE/CLOSED; no manual live acceptance remains as NEXT.
