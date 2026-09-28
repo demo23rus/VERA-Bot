@@ -10,8 +10,15 @@ import asyncio
 import inspect
 import json
 import os
+from pathlib import Path
 import sqlite3
+import sys
 from typing import Any, Awaitable, Callable, Dict, Optional, Sequence, Tuple
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+if str(REPOSITORY_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPOSITORY_ROOT))
 
 
 MARKER = "my_sunday_announcement_2026_09_28"
