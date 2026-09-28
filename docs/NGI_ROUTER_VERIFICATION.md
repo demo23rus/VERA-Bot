@@ -6,4 +6,4 @@ This file is intentionally used for safe docs-only migration proof JOBs.
 Kimi Code primary proof completed by Router.
 
 ## Automatic fallback proof
-Pending.
+Codex automatic fallback proof completed by Router.
