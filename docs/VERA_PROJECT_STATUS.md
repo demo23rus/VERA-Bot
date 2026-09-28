@@ -2,11 +2,12 @@
 
 ## SOURCE OF TRUTH
 - Canonical repository: `demo23rus/VERA-Bot`.
-- During NGI migration, current production code is being reconciled into GitHub `main`.
-- After migration, all new JOBs start from `origin/main`.
+- GitHub `main` is canonical now; production runtime files are symlinked to `/root/vera`.
+- All new JOBs start from `origin/main`.
 
 ## PROCESS
 - Standard target: discussion → owner «делай» → Coordinator narrow preflight → economical Worker Router → independent GitHub/DC verification → fast-forward promotion → controlled deploy → PASS/BLOCKED.
+- NGI Autonomous Development Standard v1 is the active production development process.
 - BotFlow is retained only as legacy/secondary infrastructure.
 
 ## CLOSED / DO NOT REOPEN
@@ -25,19 +26,18 @@
 - MAX health endpoint: `http://127.0.0.1:8080/health`.
 - Public landing: `https://sveroy.ru/`.
 - MAX is healthy.
-- Known operational defect: Telegram long polling currently conflicts with an active webhook and logs `TelegramConflictError`.
+- Telegram webhook/long-polling conflict resolved on 2026-09-28; polling is active without a new `TelegramConflictError` after restart.
 
 ## ACTIVE
-- NGI Autonomous Development Standard v1 migration.
-- Economical Worker Router with Coordinator narrow preflight.
+- Normal product development through the economical Worker Router with Coordinator narrow preflight.
 
 ## NEXT PRODUCT SLICE
-- Resolve Telegram webhook/long-polling conflict as a separate operational JOB.
-- Resume product work only through Router after migration verification.
+- Manual live acceptance of «⛪ Моё воскресенье».
+- Continue subsequent product work through Router.
 
 ## KNOWN TEST DEBT
 - No broad product test suite is required by default; use focused callback/business checks.
-- Telegram live callback smoke is blocked until webhook conflict is resolved.
+- Telegram live callback smoke is available now that the webhook conflict is resolved.
 
 ## CURRENT ACCEPTED PRODUCT BASELINES
 - Telegram + MAX assistants, owner cabinet, landing, analytics and current production features are accepted baseline unless a new reproducible defect is shown.

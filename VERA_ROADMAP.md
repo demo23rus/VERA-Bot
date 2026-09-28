@@ -8,12 +8,11 @@
 - BLOCKED
 
 ## Current
-- ACTIVE: NGI Autonomous Development Standard v1 migration and economical Worker Router.
-- BLOCKED: Telegram live polling acceptance until webhook conflict is resolved.
+- CURRENT: Normal product development through the economical Worker Router.
 
 ## NEXT
-- Operational JOB: resolve Telegram webhook versus long-polling conflict with no dropped pending updates.
-- Validate «⛪ Моё воскресенье» live in Telegram after polling recovery.
+- Manual live acceptance of «⛪ Моё воскресенье».
+- Continue subsequent product work through Router.
 
 ## DONE / CLOSED
 - Telegram and MAX core assistant flows.
@@ -23,6 +22,8 @@
 - «🕯️ Моя духовная неделя».
 - MAX real `chat_id` persistence for proactive messaging.
 - «⛪ Моё воскресенье» implementation in Telegram and MAX.
+- NGI Autonomous Development Standard v1 migration and economical Worker Router.
+- Telegram webhook/long-polling conflict resolution.
 
 ## IDEAS
 - Optional Saturday reminder for «Моё воскресенье» only after manual acceptance.
