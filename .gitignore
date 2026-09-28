@@ -1,0 +1,17 @@
+__pycache__/
+*.py[cod]
+.env
+.env.*
+*.db
+*.db-*
+*.sqlite*
+*.bak
+*.backup*
+backups/
+vera_backups/
+private_media/
+*.pem
+*.key
+node_modules/
+dist/
+.DS_Store

@@ -1,6 +1,7 @@
 import asyncio
 import random
 import re
+import difflib
 import sqlite3
 import logging
 import os
@@ -83,6 +84,8 @@ def _config_int(name: str, default: int) -> int:
 OWNER_ID      = _config_int("MAX_OWNER_ID", 549639607)
 DB_PATH       = _env.get("MAX_DB_PATH") or os.environ.get("MAX_DB_PATH", "/root/vera_max.db")
 BACKUP_DIR     = _env.get("VERA_BACKUP_DIR") or os.environ.get("VERA_BACKUP_DIR", "/root/vera_backups")
+# Read-only доступ к базе Telegram-бота для кабинета владельца (сводные метрики по обеим платформам).
+OWNER_CABINET_SIBLING_DB_PATH = _env.get("TELEGRAM_DB_PATH") or os.environ.get("TELEGRAM_DB_PATH", "/root/vera.db")
 WEBHOOK_URL   = _env.get("MAX_WEBHOOK_URL") or os.environ.get("MAX_WEBHOOK_URL", "https://sveroy.ru/webhook")
 
 logging.info(f"MAX_TOKEN: {'configured' if MAX_TOKEN else 'missing'}")
@@ -117,7 +120,7 @@ openai_client = AsyncOpenAI(api_key=OPENAI_KEY)
 claude_client = anthropic.Anthropic(api_key=ANTHROPIC_KEY, timeout=45.0)
 
 # ========== MAX API ==========
-async def max_request(method, endpoint, data=None):
+async def max_request(method, endpoint, data=None, strict=False):
     headers = {
         "Authorization": MAX_TOKEN,
         "Content-Type": "application/json"
@@ -136,16 +139,42 @@ async def max_request(method, endpoint, data=None):
             elif method == "DELETE":
                 r = await client.delete(url, headers=headers)
             logging.info(f"MAX {method} {endpoint}: {r.status_code}")
+            if strict:
+                r.raise_for_status()
             return r.json()
     except Exception as e:
         logging.error(f"Ошибка MAX API {method} {endpoint}: {e}")
+        if strict:
+            raise
         return {}
 
-async def send_message(chat_id, text, buttons=None):
+async def send_message(chat_id, text, buttons=None, strict=False):
     payload = {"text": text[:4000]}
     if buttons:
         payload["attachments"] = [{"type": "inline_keyboard", "payload": {"buttons": buttons}}]
-    return await max_request("POST", f"messages?chat_id={chat_id}", payload)
+    return await max_request("POST", f"messages?chat_id={chat_id}", payload, strict=strict)
+
+async def send_proactive_max(chat_id, text, buttons=None):
+    """Proactive/broadcast-отправка с честной проверкой HTTP-статуса.
+
+    Успехом считается только HTTP 2xx; 4xx/5xx (включая 403) — failed.
+    Не заменяет send_message() для обычных диалоговых ответов.
+    """
+    payload = {"text": text[:4000]}
+    if buttons:
+        payload["attachments"] = [{"type": "inline_keyboard", "payload": {"buttons": buttons}}]
+    headers = {"Authorization": MAX_TOKEN, "Content-Type": "application/json"}
+    url = f"{MAX_API}/messages?chat_id={chat_id}"
+    try:
+        async with httpx.AsyncClient(timeout=30) as client:
+            r = await client.post(url, json=payload, headers=headers)
+        if 200 <= r.status_code < 300:
+            return True
+        logging.warning(f"MAX proactive send failed chat_id={chat_id} status={r.status_code}")
+        return False
+    except Exception as e:
+        logging.error(f"MAX proactive send error chat_id={chat_id}: {e}")
+        return False
 
 async def get_photo_bytes(photo_url):
     """Скачиваем фото по прямому URL"""
@@ -359,8 +388,8 @@ def btn(text, payload):
 def link_btn(text, url):
     return {"type": "link", "text": text[:40], "url": url}
 
-def main_menu_buttons():
-    return [
+def main_menu_buttons(user_id=None):
+    rows = [
         [btn("☦️ Начать за 60 секунд", "quick_start")],
         [btn("🙏 Молитвы", "prayers"), btn("📅 Календарь", "calendar")],
         [btn("⛪ Таинства", "sacraments"), btn("👼 Святые", "saints")],
@@ -369,14 +398,187 @@ def main_menu_buttons():
         [btn("📖 Евангельская мысль", "daily_gospel")],
         [btn("🕊️ Мои близкие", "loved_ones")],
         [btn("👤 Мой профиль", "profile"), btn("❓ Задать вопрос", "ask_question")],
+        [btn("🕊️ Разобрать ситуацию", "situation_review")],
+        [btn("🕯️ Моя духовная неделя", "spiritual_week")],
+        [btn("⛪ Моё воскресенье", "my_sunday")],
         [btn("🕯️ Пожертвование на развитие", "donate")],
         [btn("💬 Отзыв или пожелание", "review")],
         [btn("🛠 Сообщить о проблеме", "report_problem")],
         [btn("🤝 Пригласить близкого", "invite_friend")],
     ]
+    if user_id is not None and int(user_id) == int(OWNER_ID):
+        rows.append([btn("👑 Кабинет владельца", "owner_cab:home")])
+    return rows
 
 def back_main():
     return [[btn("◀️ Главное меню", "main_menu")]]
+
+# ========== ДОНАТ-РАССЫЛКА (owner-only preview, будущая единоразовая рассылка) ==========
+DONATION_BROADCAST_TEXT = (
+    "🕊️ Спасибо, что пользуетесь православным помощником «С верой»\n\n"
+    "Если этот помощник бывает для вас полезен — помогает открыть молитву, "
+    "вспомнить о близких, посмотреть день ангела, найти спокойный ответ или "
+    "просто поддерживает в нужный момент — вы можете добровольно поддержать "
+    "развитие проекта.\n\n"
+    "Любая сумма важна. Она помогает нам улучшать православного помощника, "
+    "добавлять новые полезные разделы, поддерживать работу проекта и делать "
+    "его теплее, удобнее и понятнее для людей.\n\n"
+    "Это полностью добровольно. Если сейчас нет возможности — просто "
+    "продолжайте пользоваться помощником. Пусть он и дальше будет тихой "
+    "поддержкой в течение дня.\n\n"
+    "Спаси Господи 🙏"
+)
+DONATION_BROADCAST_ACTIVE_DAYS = 45  # окно "активные пользователи" для будущей отправки (30-60 дней)
+
+
+def donation_broadcast_buttons():
+    return [
+        [btn("🕯️ Поддержать проект", "donation_broadcast_support")],
+        [btn("🙏 Спасибо, позже", "donation_broadcast_later")],
+    ]
+
+
+def donation_broadcast_click_allowed_max(user_id: int) -> bool:
+    conn = db_connect()
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM funnel_events "
+            "WHERE user_id=? AND platform='MAX' "
+            "AND event_name IN ('donation_broadcast_preview_sent','donation_broadcast_sent') "
+            "LIMIT 1",
+            (int(user_id),),
+        ).fetchone()
+        return bool(row)
+    finally:
+        conn.close()
+
+
+async def send_donation_broadcast_batch_max(limit: int = None) -> dict:
+    """Готовая, но НЕ подключённая функция будущей единоразовой донат-рассылки (MAX).
+
+    Ничего не вызывает и не запускается автоматически — нет ни одного места в коде,
+    которое бы её вызывало. Подготовлена для следующего этапа (owner явно включит
+    рассылку отдельным патчем/командой).
+
+    Гарантии: один раз на пользователя (проверка funnel_events по event_name
+    'donation_broadcast_sent'), только активные за последние
+    DONATION_BROADCAST_ACTIVE_DAYS дней, ограничение скорости, логирование
+    успехов/ошибок, не падает и не зацикливается на ошибках отправки/блокировки бота.
+    """
+    cutoff = (datetime.now() - timedelta(days=DONATION_BROADCAST_ACTIVE_DAYS)).isoformat()
+    conn = db_connect()
+    try:
+        rows = conn.execute(
+            "SELECT u.user_id FROM users u "
+            "JOIN user_funnel_state s ON s.user_id = u.user_id AND s.platform='MAX' "
+            "WHERE s.last_seen_at >= ? "
+            "AND u.user_id NOT IN (SELECT user_id FROM funnel_events WHERE platform='MAX' AND event_name='donation_broadcast_sent')",
+            (cutoff,),
+        ).fetchall()
+    finally:
+        conn.close()
+    user_ids = [r[0] for r in rows]
+    if limit:
+        user_ids = user_ids[:limit]
+    sent, failed = 0, 0
+    for user_id in user_ids:
+        try:
+            await send_message(user_id, DONATION_BROADCAST_TEXT, donation_broadcast_buttons())
+            track_funnel_event(user_id, "MAX", "donation_broadcast_sent", target="donation_broadcast")
+            sent += 1
+        except Exception:
+            failed += 1
+        await asyncio.sleep(0.1)  # чтобы не превысить лимит MAX
+    logging.info(f"Донат-рассылка (MAX): отправлено {sent}, ошибок {failed} из {len(user_ids)}")
+    return {"sent": sent, "failed": failed, "total": len(user_ids)}
+
+
+# ========== РАССЫЛКА: «МОЯ ДУХОВНАЯ НЕДЕЛЯ» (одноразовая, сентябрь 2026) ==========
+SPIRITUAL_WEEK_BROADCAST_MARKER = "spiritual_week_announcement_2026_09"
+SPIRITUAL_WEEK_BROADCAST_DONE_KEY = "spiritual_week_broadcast_2026_09_done"
+SPIRITUAL_WEEK_BROADCAST_TEXT = (
+    "🕯️ В «С верой» появилась новая функция — «Моя духовная неделя»\n\n"
+    "Это небольшой путь на 7 дней для тех, кому сейчас хочется чуть больше тишины, "
+    "молитвы и внутренней собранности.\n\n"
+    "Можно выбрать то, что сейчас ближе: тревога, усталость, обида, трудности с "
+    "близкими, отсутствие сил на молитву или просто желание начать с малого.\n\n"
+    "Каждый день — одна короткая мысль, небольшой шаг и молитвенное направление. "
+    "Без спешки и без чувства, что вы кому-то что-то должны.\n\n"
+    "Я буду рад, если эта функция окажется для вас полезной.\n\n"
+    "И ещё скажу очень спокойно: проект «С верой» развивается только благодаря тем, "
+    "кому он действительно нужен. Если у вас есть возможность и желание поддержать "
+    "его финансово — любая сумма будет принята с благодарностью и пойдёт на "
+    "развитие помощника и новых полезных возможностей.\n\n"
+    "Если такой возможности нет — просто продолжайте пользоваться проектом. Для "
+    "меня уже важно, что он кому-то помогает.\n\n"
+    "Пусть всё доброе, что получается здесь делать, служит людям и будет во славу "
+    "Божию. 🙏"
+)
+
+
+def spiritual_week_broadcast_buttons():
+    return [
+        [btn("🕯️ Открыть духовную неделю", "sw_bcast_open")],
+        [btn("🙏 Поддержать проект", "sw_bcast_support")],
+    ]
+
+
+async def send_spiritual_week_broadcast_batch(limit: int = None) -> dict:
+    """Одноразовая рассылка анонса «Моя духовная неделя» (MAX).
+
+    Защита от повторов: перед отправкой каждому пользователю проверяется funnel_events
+    (event_name='broadcast_spiritual_week_sent', source=SPIRITUAL_WEEK_BROADCAST_MARKER).
+    Повторный вызов этой функции не отправит сообщение тем, кому оно уже доставлено.
+    """
+    conn = db_connect()
+    try:
+        rows = conn.execute(
+            "SELECT user_id FROM users WHERE user_id NOT IN ("
+            "SELECT user_id FROM funnel_events WHERE platform='MAX' "
+            "AND event_name='broadcast_spiritual_week_sent' AND source=?)",
+            (SPIRITUAL_WEEK_BROADCAST_MARKER,),
+        ).fetchall()
+    finally:
+        conn.close()
+    user_ids = [r[0] for r in rows]
+    if limit:
+        user_ids = user_ids[:limit]
+    sent, failed = 0, 0
+    for user_id in user_ids:
+        for attempt in range(2):  # один bounded retry только на HTTP 429
+            try:
+                await send_message(user_id, SPIRITUAL_WEEK_BROADCAST_TEXT, spiritual_week_broadcast_buttons(), strict=True)
+                track_funnel_event(user_id, "MAX", "broadcast_spiritual_week_sent", source=SPIRITUAL_WEEK_BROADCAST_MARKER, target="spiritual_week_broadcast")
+                sent += 1
+                break
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and attempt == 0:
+                    await asyncio.sleep(2)
+                    continue
+                failed += 1
+                track_funnel_event(user_id, "MAX", "broadcast_spiritual_week_failed", source=SPIRITUAL_WEEK_BROADCAST_MARKER, target="spiritual_week_broadcast", value=str(e)[:200])
+                break
+            except Exception as e:
+                failed += 1
+                track_funnel_event(user_id, "MAX", "broadcast_spiritual_week_failed", source=SPIRITUAL_WEEK_BROADCAST_MARKER, target="spiritual_week_broadcast", value=str(e)[:200])
+                break
+        await asyncio.sleep(0.1)  # чтобы не превысить лимит MAX
+    logging.info(f"Рассылка «Духовная неделя» (MAX): отправлено {sent}, ошибок {failed} из {len(user_ids)}")
+    return {"sent": sent, "failed": failed, "total": len(user_ids)}
+
+
+async def spiritual_week_broadcast_once_max():
+    """Запускается один раз при старте процесса. Флаг в app_settings гарантирует,
+    что рассылка не повторится при следующих перезапусках сервиса."""
+    if get_app_setting(SPIRITUAL_WEEK_BROADCAST_DONE_KEY, "") == "1":
+        return
+    try:
+        result = await send_spiritual_week_broadcast_batch()
+        logging.info(f"Рассылка «Духовная неделя» (MAX) завершена: {result}")
+        set_app_setting(SPIRITUAL_WEEK_BROADCAST_DONE_KEY, "1")
+    except Exception as e:
+        logging.error(f"Рассылка «Духовная неделя» (MAX): ошибка выполнения: {e}")
+
 
 def prayers_buttons():
     return [
@@ -845,6 +1047,224 @@ def orthodox_easter(year: int) -> date:
     return date(year, month, day) + timedelta(days=13)
 
 
+# ========== ⛪ МОЁ ВОСКРЕСЕНЬЕ ==========
+# Технический источник воскресного богослужебного чтения: azbyka.ru/days/<YYYY-MM-DD>
+# (Православный церковный календарь). Чтение НЕ выбирается ИИ по памяти — ссылка
+# извлекается из структурированной разметки страницы (раздел "Лит." — чтение
+# Литургии дня). Если страница недоступна или разметка не распознана, чтение
+# не показывается и не придумывается — см. fetch_sunday_gospel_reading().
+SUNDAY_GOSPEL_SOURCE_TEMPLATE = "https://azbyka.ru/days/{date}"
+
+SUNDAY_COMPANION_FALLBACK = {
+    "short_explanation": (
+        "Сегодняшнее чтение — о встрече человека с Богом, а не о правилах, которые нужно выполнить. "
+        "Иногда достаточно просто внимательно его прочитать и дать себе немного времени, чтобы понять, "
+        "что в нём откликается лично вам."
+    ),
+    "weekly_thought": "Не обязательно разбирать всё сразу — достаточно унести с собой одну простую мысль.",
+    "small_step": "Прочитайте евангельский отрывок этого воскресенья хотя бы один раз, не торопясь.",
+    "prayer_note": "Господи, помоги мне услышать в этом чтении то, что важно именно сейчас.",
+}
+
+MY_SUNDAY_UNAVAILABLE_TEXT = "Не удалось загрузить чтение этого воскресенья. Попробуйте чуть позже."
+
+
+def nearest_sunday(today: date | None = None) -> date:
+    today = today or date.today()
+    return today + timedelta(days=(6 - today.weekday()) % 7)
+
+
+async def fetch_sunday_gospel_reading(sunday_date: date) -> dict | None:
+    """Достаёт точную ссылку воскресного евангельского чтения Литургии с azbyka.ru/days/.
+    Никогда не придумывает чтение: при сетевой ошибке или нераспознанной разметке
+    возвращает None, а вызывающая сторона показывает безопасный fallback."""
+    url = SUNDAY_GOSPEL_SOURCE_TEMPLATE.format(date=sunday_date.isoformat())
+    try:
+        async with httpx.AsyncClient(timeout=8) as client:
+            resp = await client.get(url, headers={"User-Agent": "Mozilla/5.0 (VeraBot calendar check)"})
+        if resp.status_code != 200:
+            logging.warning(f"sunday_companion: HTTP {resp.status_code} для {url}")
+            return None
+        html = resp.text
+    except Exception as e:
+        logging.warning(f"sunday_companion: ошибка запроса к {url}: {e}")
+        return None
+
+    try:
+        meta_m = re.search(r'<meta name="description" content="([^"]+?)\.\s*Список всех церковных праздников', html)
+        week_title = meta_m.group(1).split(" - ", 1)[-1].strip() if meta_m else ""
+
+        lit_idx = html.find('liturgiya">Лит')
+        if lit_idx == -1:
+            logging.warning(f"sunday_companion: маркер 'Лит.' не найден на {url}")
+            return None
+        segment = html[lit_idx:lit_idx + 4000]
+        m = re.search(
+            r'<a class="bibref" href="(https://azbyka\.ru/biblia/\?(?:Mt|Mk|Lk|Jn)\.[^"]+)"[^>]*>([^<]+)</a>',
+            segment,
+        )
+        if not m:
+            logging.warning(f"sunday_companion: ссылка на Евангелие не найдена на {url}")
+            return None
+        bible_url, display_ref = m.groups()
+        display_ref = display_ref.replace("&ndash;", "–").replace("&amp;", "&").strip()
+        if not display_ref or not bible_url:
+            return None
+        return {
+            "gospel_ref": display_ref,
+            "gospel_url": bible_url,
+            "gospel_source": url,
+            "week_title": week_title,
+        }
+    except Exception as e:
+        logging.warning(f"sunday_companion: ошибка разбора {url}: {e}")
+        return None
+
+
+async def generate_sunday_companion_explanation(sunday_date: date, reading: dict) -> dict:
+    """ИИ используется только для объяснения смысла УЖЕ подтверждённого чтения
+    (reading — результат fetch_sunday_gospel_reading), а не для выбора самого чтения."""
+    prompt = (
+        f"Ближайшее воскресенье: {sunday_date.strftime('%d.%m.%Y')}.\n"
+        f"Неделя: {reading.get('week_title') or 'не определено'}.\n"
+        f"Евангельское чтение (подтверждено церковным календарём, источник {reading['gospel_source']}): {reading['gospel_ref']}.\n\n"
+        "Используй ТОЛЬКО это чтение — не заменяй и не придумывай другое. "
+        "Напиши тёплый, спокойный, человеческий текст от автора православного проекта «С верой» "
+        "(не от лица священника и не от лица духовника), без канцелярита и пафоса. "
+        "Ответь строго в формате JSON без каких-либо пояснений вокруг:\n"
+        '{"short_explanation": "2-4 абзаца простым языком о смысле этого чтения",'
+        ' "weekly_thought": "одна короткая мысль на неделю без морализаторства",'
+        ' "small_step": "одно небольшое практическое действие на сегодня",'
+        ' "prayer_note": "одна короткая авторская молитвенная фраза-настройка, НЕ выдавай её за канонический церковный текст"}'
+    )
+    msg = await asyncio.to_thread(
+        claude_client.messages.create,
+        model="claude-sonnet-4-5",
+        max_tokens=900,
+        system=(
+            "Ты — тёплый автор православного проекта «С верой», помогаешь человеку спокойно подготовиться "
+            "к воскресенью. Объясняешь смысл уже указанного (не тобой выбранного) евангельского чтения. "
+            "Никогда не меняй и не выдумывай сам факт чтения. Пиши живо, спокойно, без штампов и без пафоса."
+        ),
+        messages=[{"role": "user", "content": prompt}],
+    )
+    text = msg.content[0].text.strip()
+    m = re.search(r'\{.*\}', text, re.S)
+    data = json.loads(m.group(0) if m else text)
+    return {
+        "short_explanation": str(data.get("short_explanation") or "").strip() or SUNDAY_COMPANION_FALLBACK["short_explanation"],
+        "weekly_thought": str(data.get("weekly_thought") or "").strip() or SUNDAY_COMPANION_FALLBACK["weekly_thought"],
+        "small_step": str(data.get("small_step") or "").strip() or SUNDAY_COMPANION_FALLBACK["small_step"],
+        "prayer_note": str(data.get("prayer_note") or "").strip() or SUNDAY_COMPANION_FALLBACK["prayer_note"],
+    }
+
+
+async def get_sunday_companion(sunday_date: date) -> dict | None:
+    """Кеш: контент по конкретному воскресенью генерируется один раз и
+    переиспользуется для всех пользователей (без повторных AI-запросов)."""
+    key = sunday_date.isoformat()
+    conn = db_connect()
+    c = conn.cursor()
+    c.execute(
+        "SELECT gospel_ref, gospel_source, gospel_url, week_title, short_explanation, weekly_thought, small_step, prayer_note "
+        "FROM sunday_companion WHERE sunday_date=?", (key,)
+    )
+    row = c.fetchone()
+    conn.close()
+    if row:
+        return dict(zip(
+            ["gospel_ref", "gospel_source", "gospel_url", "week_title", "short_explanation", "weekly_thought", "small_step", "prayer_note"],
+            row,
+        ))
+
+    reading = await fetch_sunday_gospel_reading(sunday_date)
+    if not reading:
+        return None
+
+    try:
+        content = await generate_sunday_companion_explanation(sunday_date, reading)
+    except Exception as e:
+        logging.warning(f"sunday_companion: объяснение ИИ не удалось для {key}: {e}")
+        content = dict(SUNDAY_COMPANION_FALLBACK)
+
+    result = {**reading, **content}
+    conn2 = db_connect()
+    conn2.execute(
+        "INSERT OR REPLACE INTO sunday_companion "
+        "(sunday_date, gospel_ref, gospel_source, gospel_url, week_title, short_explanation, weekly_thought, small_step, prayer_note, generated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,?,?)",
+        (key, result["gospel_ref"], result["gospel_source"], result["gospel_url"], result["week_title"],
+         result["short_explanation"], result["weekly_thought"], result["small_step"], result["prayer_note"],
+         datetime.now().isoformat()),
+    )
+    conn2.commit()
+    conn2.close()
+    return result
+
+
+def sunday_companion_text(sunday_date: date, data: dict) -> str:
+    date_human = f"{sunday_date.day} {MONTHS_RU[sunday_date.month]} {sunday_date.year}"
+    week_line = f" ({data['week_title']})" if data.get("week_title") else ""
+    return (
+        "⛪ Моё воскресенье\n"
+        f"{date_human}\n\n"
+        f"📖 Евангелие этого воскресенья\n{data['gospel_ref']}{week_line}\n\n"
+        f"Коротко:\n{data['short_explanation']}\n\n"
+        f"Одна мысль на неделю:\n{data['weekly_thought']}\n\n"
+        f"Сегодня можно сделать:\n{data['small_step']}\n\n"
+        f"Короткая молитва (моя личная, не богослужебный текст):\n«{data['prayer_note']}»"
+    )
+
+
+MY_SUNDAY_PREPARE_TEXT = (
+    "Не нужно превращать подготовку в экзамен.\n\n"
+    "Можно начать с малого:\n\n"
+    "— вспомнить, за кого хочется помолиться;\n"
+    "— отложить на несколько минут суету;\n"
+    "— прочитать воскресное Евангелие;\n"
+    "— если собираетесь в храм — подготовиться без спешки;\n"
+    "— подумать, с чем хочется прийти к Богу в это воскресенье."
+)
+
+MY_SUNDAY_REFLECT_LABELS = {
+    "gospel": "Евангелие", "prayer": "Молитва", "service": "Служба",
+    "thought": "Мысль для себя", "situation": "Разобрать ситуацию",
+}
+
+
+def my_sunday_buttons(has_gospel: bool):
+    rows = []
+    if has_gospel:
+        rows.append([btn("📖 Прочитать Евангелие", "my_sunday_gospel")])
+    rows += [
+        [btn("🕯️ Подготовиться к воскресенью", "my_sunday_prepare")],
+        [btn("🙏 Мои близкие", "my_sunday_loved_ones")],
+        [btn("🕊️ Разобрать ситуацию", "my_sunday_situation")],
+        [btn("🏠 В меню", "main_menu")],
+    ]
+    return rows
+
+
+def my_sunday_prepare_buttons(has_gospel: bool):
+    rows = [[btn("✅ Я подготовился", "my_sunday_done")]]
+    if has_gospel:
+        rows.append([btn("📖 Евангелие", "my_sunday_gospel")])
+    rows += [
+        [btn("🙏 Добавить близкого", "loved_add_choose")],
+        [btn("🏠 В меню", "main_menu")],
+    ]
+    return rows
+
+
+def my_sunday_reflection_buttons():
+    return [
+        [btn("Евангелие", "my_sunday_reflect:gospel"), btn("Молитва", "my_sunday_reflect:prayer")],
+        [btn("Служба", "my_sunday_reflect:service"), btn("Мысль для себя", "my_sunday_reflect:thought")],
+        [btn("Хочу разобрать ситуацию", "my_sunday_reflect:situation")],
+        [btn("🏠 В меню", "main_menu")],
+    ]
+
+
 def fasting_guidance_text(today: date | None = None) -> str:
     today = today or date.today()
     pascha = orthodox_easter(today.year)
@@ -911,7 +1331,7 @@ def init_db():
         notifications INTEGER DEFAULT 0,
         remind_days INTEGER DEFAULT 3
     )""")
-    for col in ["notifications INTEGER DEFAULT 0", "remind_days INTEGER DEFAULT 3"]:
+    for col in ["notifications INTEGER DEFAULT 0", "remind_days INTEGER DEFAULT 3", "max_chat_id INTEGER DEFAULT NULL"]:
         try:
             c.execute(f"ALTER TABLE users ADD COLUMN {col}")
             conn.commit()
@@ -1089,6 +1509,30 @@ def init_db():
     )""")
     c.execute("""CREATE TABLE IF NOT EXISTS processed_updates (
         update_id TEXT PRIMARY KEY, update_type TEXT DEFAULT '', received_at TEXT NOT NULL
+    )""")
+    # «Моя духовная неделя»: минимальная отдельная таблица, старые данные не затрагивает.
+    c.execute("""CREATE TABLE IF NOT EXISTS spiritual_week (
+        user_id INTEGER NOT NULL,
+        platform TEXT NOT NULL,
+        theme TEXT NOT NULL,
+        started_at TEXT NOT NULL,
+        current_day INTEGER NOT NULL DEFAULT 1,
+        status TEXT NOT NULL DEFAULT 'active',
+        updated_at TEXT NOT NULL,
+        PRIMARY KEY (user_id, platform)
+    )""")
+    # «Моё воскресенье»: кеш контента по конкретной дате воскресенья (одна генерация на всех).
+    c.execute("""CREATE TABLE IF NOT EXISTS sunday_companion (
+        sunday_date TEXT PRIMARY KEY,
+        gospel_ref TEXT NOT NULL,
+        gospel_source TEXT NOT NULL,
+        gospel_url TEXT DEFAULT '',
+        week_title TEXT DEFAULT '',
+        short_explanation TEXT DEFAULT '',
+        weekly_thought TEXT DEFAULT '',
+        small_step TEXT DEFAULT '',
+        prayer_note TEXT DEFAULT '',
+        generated_at TEXT NOT NULL
     )""")
     for migration in (
         "ALTER TABLE user_funnel_state ADD COLUMN last_source TEXT DEFAULT ''",
@@ -1691,7 +2135,7 @@ def get_user(user_id, username="", first_name=""):
         c.execute("SELECT * FROM users WHERE user_id=?", (user_id,))
         row = c.fetchone()
     conn.close()
-    cols = ["user_id","username","first_name","step","church_name","birth_date","angel_day","onboarded","notifications","remind_days"]
+    cols = ["user_id","username","first_name","step","church_name","birth_date","angel_day","onboarded","notifications","remind_days","max_chat_id"]
     return dict(zip(cols, row))
 
 def set_step(user_id, step):
@@ -1699,6 +2143,31 @@ def set_step(user_id, step):
     conn.execute("UPDATE users SET step=? WHERE user_id=?", (step, user_id))
     conn.commit()
     conn.close()
+
+def save_user_chat_id(user_id, chat_id):
+    """Сохраняет достоверный MAX chat_id, полученный из входящего webhook-события."""
+    if not user_id or not chat_id:
+        return
+    try:
+        conn = db_connect()
+        conn.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+        conn.execute("UPDATE users SET max_chat_id=? WHERE user_id=?", (int(chat_id), int(user_id)))
+        conn.commit()
+        conn.close()
+    except Exception as e:
+        logging.error(f"save_user_chat_id error user_id={user_id}: {e}")
+
+def get_user_chat_id(user_id):
+    """Возвращает достоверный chat_id пользователя MAX (сохранённый из webhook), либо None."""
+    try:
+        conn = db_connect()
+        row = conn.execute("SELECT max_chat_id FROM users WHERE user_id=?", (user_id,)).fetchone()
+        conn.close()
+        if row and row[0]:
+            return row[0]
+    except Exception as e:
+        logging.error(f"get_user_chat_id error user_id={user_id}: {e}")
+    return None
 
 def save_favorite(user_id, title, content):
     conn = db_connect()
@@ -1796,6 +2265,475 @@ async def ask_claude(question, depth="medium"):
     except Exception as e:
         logging.error(f"Ошибка Claude: {e}")
         record_critical_error("claude_max", e)
+        return "error"
+
+
+SITUATION_REVIEW_INTRO = (
+    "Расскажите, что произошло.\n\n"
+    "Можно написать своими словами: с кем связана ситуация, что вас тревожит и какой вопрос сейчас самый тяжёлый.\n\n"
+    "Я постараюсь помочь спокойно разобрать это с православным взглядом, но не заменяю живого священника, исповедь или духовный совет."
+)
+
+SITUATION_REVIEW_FINAL_NOTE = (
+    "Это не заменяет личного разговора со священником, особенно если ситуация тяжёлая или касается исповеди, "
+    "семьи, зависимости, насилия, отчаяния или серьёзного выбора."
+)
+
+SITUATION_CRISIS_RE = re.compile(
+    r"(самоуб|самоповреж|порезать себя|убить себя|не хочу жить|хочу умереть|желани[ея] умереть|"
+    r"суицид|насили|избива|угрож|угроза|опасност|реб[её]нк|дет(ям|ей)|жизни|прямо сейчас|"
+    r"зависимост|запой|ломк|передоз)",
+    re.IGNORECASE,
+)
+SITUATION_REVIEW_PENDING = {}
+
+# ========== 🕯️ МОЯ ДУХОВНАЯ НЕДЕЛЯ ==========
+SPIRITUAL_WEEK_THEME_LABELS = {
+    "anxiety": "Тревога",
+    "tired": "Усталость",
+    "resentment": "Обида",
+    "no_pray": "Нет сил молиться",
+    "closer": "Хочу быть ближе к Богу",
+    "family": "Тяжело с близкими",
+    "start_small": "Хочу начать с малого",
+}
+
+SPIRITUAL_WEEK_THEMES = {
+    "anxiety": {
+        "opening": "Хорошо. Тогда попробуем немного успокоить тревогу.",
+        "overview": "На эту неделю я предлагаю вам спокойный путь: не бороться с тревогой силой, а каждый день делать один небольшой шаг к миру внутри и к доверию Богу.",
+        "days": [
+            {"title": "остановиться и подышать спокойно",
+             "reflect": "Сегодня не нужно решать всё и справляться со всем сразу.",
+             "practice": "Остановитесь на минуту и скажите коротко: «Господи, побудь рядом, мне сейчас тревожно».",
+             "action": "перед тем как снова начать думать о том, что может пойти не так, сделайте три спокойных вдоха.",
+             "question": "что помогло мне почувствовать чуть больше покоя сегодня?"},
+            {"title": "вспомнить, что вы не один в этой тревоге",
+             "reflect": "Тревога часто говорит, что вы один в трудности. Это не так.",
+             "practice": "Вспомните одного человека, который сейчас может быть рядом с вами хотя бы мысленно.",
+             "action": "если тревога усилится — напишите этому человеку пару слов или помолитесь о нём.",
+             "question": "почувствовал ли я сегодня, что не один?"},
+            {"title": "не спешить с тревожными мыслями",
+             "reflect": "Тревожная мысль торопит и требует решения прямо сейчас.",
+             "practice": "Заметьте: не каждую тревожную мысль нужно сразу решать.",
+             "action": "когда придёт беспокойная мысль, отложите её на паузу и скажите себе: «сейчас не буду спешить».",
+             "question": "какую мысль сегодня получилось не торопить?"},
+            {"title": "прочитать маленький отрывок о доверии",
+             "reflect": "Иногда легче, когда рядом не только свои мысли, но и слово Божие.",
+             "practice": "Прочитайте один маленький отрывок Евангелия — можно всего несколько строк.",
+             "action": "выберите отрывок не выбирая долго: подойдёт любой, где говорится о доверии или мире.",
+             "question": "что из прочитанного откликнулось именно сегодня?"},
+            {"title": "честно назвать перед Богом, что тревожит",
+             "reflect": "Тревоге бывает легче, когда её называют вслух, а не носят молча.",
+             "practice": "Скажите Богу честно, что именно тревожит вас сейчас, без красивых слов.",
+             "action": "если получится — запишите это одним предложением, просто для себя.",
+             "question": "стало ли немного легче, когда я назвал это честно?"},
+            {"title": "поблагодарить за один спокойный момент",
+             "reflect": "Даже в тревожный день можно найти один момент, за который можно быть благодарным.",
+             "practice": "Поблагодарите Бога за один конкретный момент этого дня — даже самый маленький.",
+             "action": "произнесите вслух или про себя: «Спаси, Господи, за это».",
+             "question": "что сегодня было хорошим, даже если тревога не совсем ушла?"},
+            {"title": "спокойно оглянуться на неделю",
+             "reflect": "Неделя закончилась — и тревога, возможно, никуда не исчезла полностью. Это нормально.",
+             "practice": "Спокойно оглянитесь: не на то, что не получилось, а на то, что вы пробовали быть с Богом в этой тревоге.",
+             "action": "не ставьте себе оценку за неделю — просто отметьте один момент, который был самым спокойным.",
+             "question": "что я хочу взять с собой из этой недели дальше?"},
+        ],
+    },
+    "tired": {
+        "opening": "Хорошо. Тогда дадим себе право на малые шаги и отдых без чувства вины.",
+        "overview": "На эту неделю я предлагаю вам спокойный путь: не требовать от себя многого, а каждый день делать один небольшой шаг — без самообвинения за усталость.",
+        "days": [
+            {"title": "остановиться и разрешить себе не спешить",
+             "reflect": "Сегодня не нужно делать много.",
+             "practice": "Остановитесь на минуту и скажите коротко: «Господи, дай мне сил на сегодня, не на всю жизнь».",
+             "action": "разрешите себе один момент отдыха без чувства вины — даже пять минут.",
+             "question": "что сегодня получилось сделать без спешки?"},
+            {"title": "вспомнить один тёплый момент",
+             "reflect": "Усталость легче переносить, когда рядом есть тёплое воспоминание.",
+             "practice": "Вспомните одного близкого человека и один добрый момент, связанный с ним.",
+             "action": "если есть силы — напишите этому человеку короткое доброе слово.",
+             "question": "какое воспоминание сегодня немного согрело?"},
+            {"title": "не ругать себя за усталость",
+             "reflect": "Усталость часто приходит вместе с самообвинением: «я мало успел».",
+             "practice": "Сегодня не ругайте себя за то, что не хватило сил.",
+             "action": "если появится мысль «я недостаточно сделал» — скажите себе: «на сегодня было достаточно».",
+             "question": "получилось ли не осуждать себя за усталость?"},
+            {"title": "прочитать маленький отрывок про покой",
+             "reflect": "Даже в усталый день можно найти пару строк, которые не требуют усилий.",
+             "practice": "Прочитайте маленький отрывок о покое — не обязательно длинный.",
+             "action": "выберите любой короткий отрывок и просто прочитайте его один раз, без анализа.",
+             "question": "что из прочитанного показалось похожим на отдых?"},
+            {"title": "простить себе несделанные дела",
+             "reflect": "Усталость иногда несёт с собой чувство, что вы что-то не успели или кого-то подвели.",
+             "practice": "Простите себе несделанные сегодня дела — без длинных объяснений.",
+             "action": "мысленно скажите: «прощаю себе, что не всё успел сегодня».",
+             "question": "что получилось отпустить сегодня?"},
+            {"title": "поблагодарить за силы на этот день",
+             "reflect": "Даже усталый день держится не только на ваших силах.",
+             "practice": "Поблагодарите Бога за силы, которые всё же были сегодня.",
+             "action": "назовите один момент дня, где силы точно были — пусть самый обычный.",
+             "question": "за что я могу сказать «спасибо» в конце этого дня?"},
+            {"title": "спокойно подвести итог без самообвинения",
+             "reflect": "Неделя закончилась — и усталость, возможно, не прошла полностью. Это нормально.",
+             "practice": "Спокойно подведите итог без самообвинения: усталость — не повод себя ругать.",
+             "action": "отметьте один маленький шаг за неделю, который дался легче остальных.",
+             "question": "что я хочу сделать иначе на следующей неделе — без давления на себя?"},
+        ],
+    },
+    "resentment": {
+        "opening": "Хорошо. Тогда попробуем мягко, без спешки, двигаться к миру с этим человеком.",
+        "overview": "На эту неделю я предлагаю вам спокойный путь: не требовать от себя простить всё сразу, а каждый день делать один маленький шаг к честности и миру в сердце.",
+        "days": [
+            {"title": "остановиться и честно назвать обиду",
+             "reflect": "Сегодня не нужно сразу прощать или забывать — только немного остановиться.",
+             "practice": "Остановитесь на минуту и честно назовите перед Богом: «мне обидно».",
+             "action": "перед тем как снова прокручивать обидную ситуацию в голове, сделайте одну паузу.",
+             "question": "что я сегодня почувствовал, когда назвал обиду честно?"},
+            {"title": "вспомнить этого человека без осуждения",
+             "reflect": "За обидой почти всегда стоит человек, а не только сама ситуация.",
+             "practice": "Вспомните этого человека — попробуйте увидеть в нём не только то, что причинило боль.",
+             "action": "если получится, помолитесь коротко: «Господи, помоги мне видеть в нём человека, а не только обиду».",
+             "question": "что удалось увидеть в этом человеке, кроме самой обиды?"},
+            {"title": "не отвечать раздражением",
+             "reflect": "Обида часто просит ответить резко или доказать свою правоту.",
+             "practice": "Сегодня не отвечайте раздражением, даже если внутри всё ещё больно.",
+             "action": "перед резким словом сделайте одну паузу и, если можно, промолчите или ответьте мягче.",
+             "question": "получилось ли не ответить раздражением хотя бы раз?"},
+            {"title": "прочитать маленький отрывок о прощении",
+             "reflect": "Слова о прощении легче принять, когда их не торопят.",
+             "practice": "Прочитайте маленький отрывок о прощении — без спешки его исполнить.",
+             "action": "просто прочитайте и оставьте эти слова с собой на день, не требуя от себя немедленного результата.",
+             "question": "что откликнулось в прочитанном о прощении?"},
+            {"title": "сделать маленький шаг к прощению",
+             "reflect": "Прощение — это не одно решение, а маленький шаг, который можно повторять.",
+             "practice": "Сделайте один маленький шаг к прощению в сердце — не обязательно вслух и не обязательно этому человеку прямо сейчас.",
+             "action": "мысленно скажите: «отпускаю немного этой тяжести сегодня».",
+             "question": "стало ли немного легче после этого маленького шага?"},
+            {"title": "поблагодарить за возможность стать мягче",
+             "reflect": "Даже в истории с обидой можно найти, за что поблагодарить Бога.",
+             "practice": "Поблагодарите Бога за возможность становиться немного мягче.",
+             "action": "назовите один момент за неделю, где получилось быть чуть спокойнее с этим человеком или с собой.",
+             "question": "что я хочу поблагодарить сегодня, несмотря на обиду?"},
+            {"title": "спокойно подвести итог, не требуя всё простить сразу",
+             "reflect": "Неделя закончилась — обида, возможно, не исчезла полностью. Это нормально, прощение не бывает быстрым.",
+             "practice": "Спокойно подведите итог: важно не то, что всё простилось сразу, а то, что вы двигались в эту сторону.",
+             "action": "не требуйте от себя полного прощения — просто отметьте, что стало немного легче.",
+             "question": "что я хочу взять с собой из этой недели дальше?"},
+        ],
+    },
+    "no_pray": {
+        "opening": "Хорошо. Тогда начнём с самой простой, короткой молитвы — без давления на себя.",
+        "overview": "На эту неделю я предлагаю вам спокойный путь: не требовать от себя длинных молитвенных правил, а каждый день говорить с Богом хотя бы немного, как получится.",
+        "days": [
+            {"title": "сказать Богу несколько слов, как получится",
+             "reflect": "Сегодня не нужно много слов — молитва может быть совсем короткой.",
+             "practice": "Просто скажите Богу несколько слов, как получится, даже если это будет одно слово.",
+             "action": "не ищите правильную форму — скажите то, что первым пришло на сердце.",
+             "question": "что я почувствовал, когда сказал Богу хотя бы несколько слов?"},
+            {"title": "вспомнить, что молитва не требует красивых слов",
+             "reflect": "Молитва не требует красивых или длинных слов, чтобы быть настоящей.",
+             "practice": "Вспомните, что даже самая простая молитва услышана — так же, как и длинная.",
+             "action": "сегодня разрешите себе молиться своими словами, без правил.",
+             "question": "стало ли немного спокойнее от простых слов?"},
+            {"title": "не винить себя, если снова было трудно",
+             "reflect": "Бывает трудно молиться — и это не повод себя винить.",
+             "practice": "Если сегодня снова было трудно — просто не вините себя за это.",
+             "action": "скажите себе: «сегодня было трудно молиться, и это нормально».",
+             "question": "получилось ли не осуждать себя за трудность в молитве?"},
+            {"title": "прочитать одну короткую строку молитвы",
+             "reflect": "Иногда легче начать с одной строки, чем с целого правила.",
+             "practice": "Прочитайте одну короткую строку молитвы — не больше.",
+             "action": "выберите любую знакомую строку, которую легко произнести, и повторите её несколько раз.",
+             "question": "что почувствовалось от этой одной строки?"},
+            {"title": "честно сказать Богу, что сил мало",
+             "reflect": "Богу можно сказать честно, что сил на молитву сейчас мало.",
+             "practice": "Скажите Богу прямо: «у меня сейчас мало сил, но я здесь».",
+             "action": "не пытайтесь сделать больше, чем можете — этой честности достаточно.",
+             "question": "что изменилось, когда я перестал требовать от себя многого?"},
+            {"title": "поблагодарить за одну минуту покоя",
+             "reflect": "Даже одна спокойная минута за день — повод сказать «спасибо».",
+             "practice": "Поблагодарите хотя бы за одну прожитую минуту покоя за этот день.",
+             "action": "найдите этот момент и просто отметьте его словом «спасибо».",
+             "question": "какая минута сегодня была самой спокойной?"},
+            {"title": "спокойно посмотреть на неделю без требований к себе",
+             "reflect": "Неделя закончилась — и, возможно, молиться так и не стало легко. Это нормально.",
+             "practice": "Спокойно посмотрите на неделю без требований к себе: важно не количество слов, а то, что вы возвращались.",
+             "action": "не ставьте себе оценку — отметьте один момент, где молитва была настоящей, даже если короткой.",
+             "question": "что я хочу сохранить из этой недели в разговоре с Богом?"},
+        ],
+    },
+    "closer": {
+        "opening": "Хорошо. Тогда сделаем эту неделю немного ближе к Богу — через молитву, Евангелие и благодарность.",
+        "overview": "На эту неделю я предлагаю вам спокойный путь: без гонки за правилами, а с одним небольшим шагом в день, который делает молитву и Евангелие чуть ближе.",
+        "days": [
+            {"title": "остановиться и коротко помолиться",
+             "reflect": "Близость с Богом часто начинается не с многого, а с одной остановки в течение дня.",
+             "practice": "Остановитесь на минуту и коротко помолитесь: «Господи, побудь со мной сегодня».",
+             "action": "выберите одно время дня, когда сможете вспомнить об этом снова — например, утро или вечер.",
+             "question": "в какой момент дня я вспомнил о Боге сегодня?"},
+            {"title": "прочитать маленький отрывок Евангелия",
+             "reflect": "Евангелие не обязательно читать много, чтобы оно тронуло сердце.",
+             "practice": "Прочитайте маленький отрывок Евангелия — несколько строк, не больше.",
+             "action": "перечитайте эти строки ещё раз перед сном, если будет минута.",
+             "question": "какая мысль или фраза из отрывка осталась с вами?"},
+            {"title": "заметить один момент благодати",
+             "reflect": "Благодать иногда заметна в самых обычных моментах дня.",
+             "practice": "Постарайтесь заметить один момент за день, где чувствовалось что-то похожее на тихую радость или мир.",
+             "action": "просто отметьте этот момент, не объясняя его.",
+             "question": "какой момент сегодня был похож на благодать?"},
+            {"title": "вспомнить одного близкого в молитве",
+             "reflect": "Близость к Богу часто идёт рядом с памятью о близких людях.",
+             "practice": "Помолитесь коротко об одном человеке, который вам дорог.",
+             "action": "назовите его имя перед Богом, даже без длинных слов.",
+             "question": "что почувствовалось, когда я молился об этом человеке?"},
+            {"title": "поблагодарить за один конкретный день",
+             "reflect": "Благодарность — один из самых простых путей стать ближе к Богу.",
+             "practice": "Поблагодарите Бога за один конкретный день, вспомнив хотя бы одну деталь.",
+             "action": "назовите вслух или про себя: «спасибо за этот день».",
+             "question": "за что именно я сегодня благодарен?"},
+            {"title": "сделать молитву чуть регулярнее",
+             "reflect": "Регулярность в молитве важнее длины и красоты слов.",
+             "practice": "Попробуйте сегодня помолиться немного регулярнее, чем обычно — без спешки и напряжения.",
+             "action": "выберите одно короткое время для молитвы и просто побудьте в нём несколько минут.",
+             "question": "что изменилось от небольшой регулярности?"},
+            {"title": "спокойно подвести итог пути к Богу",
+             "reflect": "Неделя закончилась — путь к Богу на этом не заканчивается.",
+             "practice": "Спокойно подведите итог: не по тому, сколько успели, а по тому, что пробовали быть ближе.",
+             "action": "отметьте один момент недели, который был самым близким к Богу.",
+             "question": "что я хочу продолжать делать после этой недели?"},
+        ],
+    },
+    "family": {
+        "opening": "Хорошо. Тогда попробуем пройти эту неделю немного терпеливее с близкими — без злобы и без потери себя.",
+        "overview": "На эту неделю я предлагаю вам спокойный путь: не решать все сложности сразу, а каждый день делать один небольшой шаг к терпению и миру в отношениях.",
+        "days": [
+            {"title": "остановиться перед резким словом",
+             "reflect": "Сегодня не нужно решать все сложности в отношениях сразу.",
+             "practice": "Остановитесь перед резким словом и скажите про себя: «Господи, помоги мне быть терпеливее».",
+             "action": "перед тем как ответить близкому резко, сделайте одну паузу.",
+             "question": "получилось ли сегодня сделать эту паузу хотя бы раз?"},
+            {"title": "вспомнить одного близкого с теплом",
+             "reflect": "За сложностью в отношениях часто стоит человек, которого вы когда-то любили просто и легко.",
+             "practice": "Вспомните одного близкого человека с теплом — через что-то доброе из прошлого, а не через сегодняшнюю сложность.",
+             "action": "если получится, скажите или напишите ему что-то простое и доброе.",
+             "question": "какое тёплое воспоминание вспомнилось сегодня?"},
+            {"title": "не отвечать раздражением на раздражение",
+             "reflect": "Раздражение близкого часто хочет вызвать раздражение в ответ.",
+             "practice": "Сегодня постарайтесь не отвечать раздражением на раздражение.",
+             "action": "если станет тяжело — выйдите на минуту из разговора, а не отвечайте сразу.",
+             "question": "получилось ли не подхватить чужое раздражение?"},
+            {"title": "прочитать маленький отрывок о терпении",
+             "reflect": "Терпение — это не слабость, а тихая сила.",
+             "practice": "Прочитайте маленький отрывок о терпении.",
+             "action": "запомните из него одну фразу и вспомните её в трудный момент дня.",
+             "question": "что из прочитанного помогло сегодня?"},
+            {"title": "помолиться за родного человека",
+             "reflect": "Молитва за родного человека иногда меняет не его, а нас самих.",
+             "practice": "Помолитесь за одного близкого человека, с которым сейчас непросто.",
+             "action": "назовите его имя перед Богом без осуждения, просто как есть.",
+             "question": "что изменилось во мне после этой молитвы?"},
+            {"title": "поблагодарить за один спокойный разговор",
+             "reflect": "Даже один спокойный момент общения — это уже немало.",
+             "practice": "Поблагодарите Бога за один спокойный момент общения с близким за этот день.",
+             "action": "если разговора не было — поблагодарите просто за то, что человек рядом.",
+             "question": "какой момент общения сегодня был самым спокойным?"},
+            {"title": "спокойно подвести итог без обид",
+             "reflect": "Неделя закончилась — отношения, возможно, не стали идеальными. Это нормально.",
+             "practice": "Спокойно подведите итог: важно не то, что всё решилось, а то, что вы старались быть терпеливее.",
+             "action": "отметьте один маленький шаг за неделю, который дался легче.",
+             "question": "что я хочу взять с собой в отношения с близкими дальше?"},
+        ],
+    },
+    "start_small": {
+        "opening": "Хорошо. Тогда начнём с малого.",
+        "overview": "На эту неделю я предлагаю вам спокойный путь: не требовать от себя многого, а каждый день делать один небольшой шаг к миру внутри.",
+        "days": [
+            {"title": "остановиться и помолиться коротко",
+             "reflect": "Сегодня не нужно делать много.",
+             "practice": "Остановитесь на минуту и скажите коротко: «Господи, помоги мне пройти этот день с миром».",
+             "action": "перед тем как ответить кому-то резко, сделайте одну паузу.",
+             "question": "что сегодня удалось сохранить в сердце?"},
+            {"title": "вспомнить одного близкого",
+             "reflect": "Маленький шаг — это уже шаг, даже если он совсем небольшой.",
+             "practice": "Вспомните одного близкого человека и пожелайте ему добра, хотя бы мысленно.",
+             "action": "если получится — напишите ему простое доброе слово.",
+             "question": "кого я сегодня вспомнил с добром?"},
+            {"title": "не отвечать раздражением",
+             "reflect": "Не отвечать раздражением — это тоже маленький, но настоящий шаг.",
+             "practice": "Сегодня попробуйте один раз не ответить раздражением, даже если захочется.",
+             "action": "перед резким ответом сделайте одну паузу.",
+             "question": "получилось ли сегодня сдержать раздражение хотя бы раз?"},
+            {"title": "прочитать маленький отрывок",
+             "reflect": "Не нужно читать много, чтобы это было полезно.",
+             "practice": "Прочитайте один маленький отрывок — всего несколько строк.",
+             "action": "выберите любой короткий отрывок, не выбирая долго.",
+             "question": "что запомнилось из прочитанного?"},
+            {"title": "попросить прощения или простить в сердце",
+             "reflect": "Прощение можно начинать с самого малого — даже в сердце, без слов вслух.",
+             "practice": "Попросите прощения или простите кого-то — хотя бы мысленно, про себя.",
+             "action": "выберите одну простую ситуацию и отпустите её немного.",
+             "question": "стало ли немного легче после этого шага?"},
+            {"title": "поблагодарить Бога за один день",
+             "reflect": "За один день можно найти хотя бы одну причину сказать «спасибо».",
+             "practice": "Поблагодарите Бога за этот день — просто, своими словами.",
+             "action": "назовите одну конкретную вещь, за которую благодарны сегодня.",
+             "question": "за что я сегодня благодарен?"},
+            {"title": "спокойно подвести итог",
+             "reflect": "Неделя закончилась — и это уже маленькая, но настоящая победа.",
+             "practice": "Спокойно подведите итог, не требуя от себя многого.",
+             "action": "отметьте один шаг из недели, который дался легче всего.",
+             "question": "что из этой недели я хочу оставить с собой дальше?"},
+        ],
+    },
+}
+
+SPIRITUAL_WEEK_INTRO = (
+    "Я подготовил для вас небольшой путь на 7 дней.\n\n"
+    "Без спешки, без сложных правил и без чувства вины. Каждый день — одна короткая мысль, "
+    "маленькое действие и молитвенное настроение.\n\n"
+    "Выберите, что сейчас ближе вашему состоянию:"
+)
+
+SPIRITUAL_WEEK_COMPLETE_TEXT = (
+    "Вы прошли эту неделю.\n\n"
+    "Пусть даже не всё получилось — это не повод себя ругать. В духовной жизни важна не резкость, а возвращение.\n\n"
+    "Можно начать ещё одну неделю с другой темой или просто оставить один маленький шаг, который оказался для вас самым нужным."
+)
+
+def spiritual_week_theme_buttons():
+    rows = [[btn(label, f"sw_theme:{key}")] for key, label in SPIRITUAL_WEEK_THEME_LABELS.items()]
+    rows.append([btn("⬅️ Назад", "main_menu")])
+    return rows
+
+def spiritual_week_confirm_buttons(theme_key):
+    return [
+        [btn("🕯️ Начать неделю", f"sw_start:{theme_key}")],
+        [btn("⬅️ Назад", "spiritual_week")],
+    ]
+
+def spiritual_week_day_buttons(theme_key, day):
+    return [
+        [btn("✅ Сделал", f"sw_done:{theme_key}:{day}")],
+        [btn("📖 Следующий шаг", f"sw_next:{theme_key}:{day}")],
+        [btn("🙏 Подобрать молитву", "sw_prayer")],
+        [btn("🕊️ Разобрать ситуацию", "sw_situation")],
+        [btn("🏠 В меню", "main_menu")],
+    ]
+
+def spiritual_week_complete_buttons():
+    return [
+        [btn("🕯️ Начать новую неделю", "spiritual_week")],
+        [btn("🙏 Подобрать молитву", "sw_prayer")],
+        [btn("🕊️ Разобрать ситуацию", "sw_situation")],
+        [btn("🕯️ Поддержать проект", "sw_support")],
+        [btn("🏠 В меню", "main_menu")],
+    ]
+
+def spiritual_week_confirm_text(theme_key):
+    theme = SPIRITUAL_WEEK_THEMES[theme_key]
+    days_list = "\n".join(f"День {i+1} — {d['title']}" for i, d in enumerate(theme["days"]))
+    return (
+        f"{theme['opening']}\n\n"
+        f"{theme['overview']}\n\n"
+        "Каждый день просто открывайте кнопку «📖 Следующий шаг» — и я покажу, что приготовил для этого дня.\n\n"
+        f"{days_list}\n\n"
+        "Начнём сегодня?"
+    )
+
+def spiritual_week_day_text(theme_key, day):
+    d = SPIRITUAL_WEEK_THEMES[theme_key]["days"][day - 1]
+    return (
+        f"День {day} из 7\n\n"
+        f"{d['reflect']}\n\n"
+        f"{d['practice']}\n\n"
+        f"Маленький шаг:\n{d['action']}\n\n"
+        f"Вечером можно спросить себя:\n{d['question']}"
+    )
+
+def spiritual_week_get(user_id):
+    conn = db_connect()
+    row = conn.execute("SELECT theme,current_day,status FROM spiritual_week WHERE user_id=? AND platform=?", (int(user_id), "MAX")).fetchone()
+    conn.close()
+    if not row:
+        return None
+    return {"theme": row[0], "current_day": row[1], "status": row[2]}
+
+def spiritual_week_start(user_id, theme_key):
+    now = datetime.now().isoformat()
+    conn = db_connect()
+    conn.execute(
+        "INSERT OR REPLACE INTO spiritual_week(user_id,platform,theme,started_at,current_day,status,updated_at) VALUES (?,?,?,?,1,'active',?)",
+        (int(user_id), "MAX", theme_key, now, now),
+    )
+    conn.commit()
+    conn.close()
+
+def spiritual_week_set_day(user_id, day, status="active"):
+    conn = db_connect()
+    conn.execute(
+        "UPDATE spiritual_week SET current_day=?, status=?, updated_at=? WHERE user_id=? AND platform=?",
+        (day, status, datetime.now().isoformat(), int(user_id), "MAX"),
+    )
+    conn.commit()
+    conn.close()
+
+def situation_review_buttons():
+    return [
+        [btn("✍️ Написать ситуацию", "situation_review_write")],
+        [btn("⬅️ Назад", "main_menu")],
+    ]
+
+def situation_review_result_buttons():
+    return [
+        [btn("🙏 Подобрать молитву", "situation_review_prayer")],
+        [btn("✍️ Разобрать ещё одну ситуацию", "situation_review")],
+        [btn("🕯️ Поддержать проект", "situation_review_support")],
+        [btn("🏠 В меню", "main_menu")],
+    ]
+
+def situation_review_crisis_text():
+    return (
+        "Мне очень жаль, что вам сейчас так тяжело.\n\n"
+        "Если есть немедленная опасность для вас, детей или другого человека, пожалуйста, сейчас обратитесь в экстренные службы "
+        "или к человеку рядом, который может помочь физически быть в безопасности. Не оставайтесь одни.\n\n"
+        "В такой ситуации лучше не продолжать обычный духовный разбор как будто всё спокойно. Нужны живые люди рядом: близкий человек, "
+        "священник, врач, кризисный специалист или служба помощи.\n\n"
+        "Можно прямо сейчас написать или позвонить кому-то надёжному: «Мне опасно/очень тяжело, побудь со мной и помоги обратиться за помощью».\n\n"
+        + SITUATION_REVIEW_FINAL_NOTE
+    )
+
+def needs_situation_clarification(text):
+    return len(" ".join((text or "").split())) < 80
+
+async def ask_situation_review(situation_text):
+    try:
+        msg = await asyncio.to_thread(
+            claude_client.messages.create,
+            model="claude-sonnet-4-5",
+            max_tokens=900,
+            system=(
+                "Ты бережный православный помощник, но не священник и не духовник. "
+                "Разбирай жизненную ситуацию тепло, без давления, осуждения, канцелярита и психотерапевтического жаргона. "
+                "Не давай жёстких духовных указаний, не решай за человека вопросы развода, аборта, ухода из семьи, отказа от лечения или других тяжёлых выборов. "
+                "Не оправдывай грех, насилие, месть и манипуляции. Не давай медицинских диагнозов и юридических инструкций. "
+                "Мягко возвращай к ответственности, молитве, покаянию, миру и здравому ближайшему шагу. "
+                "Если есть признаки насилия, угрозы жизни, отчаяния, зависимости или опасности для детей, прямо направляй к срочной живой помощи, священнику и профильным специалистам. "
+                "Ответ строго структурируй с заголовком и пунктами: "
+                "🕊️ Попробуем посмотреть спокойно; "
+                "1. Что здесь может быть самым болезненным; "
+                "2. На что важно обратить внимание без самообвинения и осуждения; "
+                "3. Какой маленький шаг можно сделать сейчас; "
+                "4. О чём можно помолиться; "
+                "5. Когда лучше поговорить со священником. "
+                "В конце обязательно добавь: " + SITUATION_REVIEW_FINAL_NOTE
+            ),
+            messages=[{"role": "user", "content": situation_text[:3500]}],
+        )
+        return msg.content[0].text
+    except Exception as e:
+        logging.error(f"Ошибка разбора ситуации MAX: {e}")
+        record_critical_error("situation_review_max", e)
         return "error"
 
 
@@ -2206,7 +3144,7 @@ async def handle_funnel_callback_max(chat_id: int, user_id: int, payload: str, f
 
     if payload == "journey_stop":
         stop_nurture_journey(user_id, "MAX")
-        await send_message(chat_id, "🔕 7-дневная серия отключена.", main_menu_buttons())
+        await send_message(chat_id, "🔕 7-дневная серия отключена.", main_menu_buttons(user_id))
         return True
 
     if payload == "invite_friend":
@@ -2261,7 +3199,7 @@ async def handle_funnel_callback_max(chat_id: int, user_id: int, payload: str, f
             if review_id:
                 await send_message(OWNER_ID, f"📢 Пользователь разрешил анонимную публикацию отзыва #{review_id}.", [[btn("✅ Одобрить для канала", f"owner_review_public:{review_id}")]])
         conn.close()
-        await send_message(chat_id, "Спасибо. Отзыв будет использован только анонимно." if value else "Понял. Отзыв останется только внутри команды проекта.", main_menu_buttons())
+        await send_message(chat_id, "Спасибо. Отзыв будет использован только анонимно." if value else "Понял. Отзыв останется только внутри команды проекта.", main_menu_buttons(user_id))
         return True
 
     if payload.startswith("owner_review_public:"):
@@ -2300,18 +3238,24 @@ async def nurture_loop_max():
     await asyncio.sleep(45)
     while True:
         for user_id, track, day_index in due_nurture_rows("MAX"):
+            chat_id = get_user_chat_id(user_id)
+            if not chat_id:
+                logging.info(f"Nurture MAX: skipped_no_chat_id user_id={user_id}")
+                continue
             try:
                 series = NURTURE_MESSAGES.get(track, NURTURE_MESSAGES["support"])
                 idx = min(int(day_index), len(series) - 1)
                 text, target = series[idx]
-                await send_message(
-                    int(user_id),
+                if await send_proactive_max(
+                    chat_id,
                     text,
                     [[btn("Открыть", target)], [btn("🔕 Отключить серию", "journey_stop")]],
-                )
-                track_funnel_event(user_id, "MAX", "nurture_message_sent", target=track, value=str(NURTURE_DAY_OFFSETS[idx]))
-                advance_nurture(user_id, "MAX", idx)
-                await asyncio.sleep(0.15)
+                ):
+                    track_funnel_event(user_id, "MAX", "nurture_message_sent", target=track, value=str(NURTURE_DAY_OFFSETS[idx]))
+                    advance_nurture(user_id, "MAX", idx)
+                    await asyncio.sleep(0.15)
+                else:
+                    logging.warning(f"Nurture MAX: failed_send user_id={user_id} chat_id={chat_id}")
             except Exception as e:
                 logging.error(f"Nurture MAX send error {user_id}: {e}")
         await asyncio.sleep(600)
@@ -2416,19 +3360,19 @@ async def handle_start(chat_id, user_id, first_name, username, start_payload="")
             "❓ Задать вопрос о вере\n\n"
             "📢 Наш канал → https://max.ru/-75405929805299\n\n"
             "Чем могу помочь? ☦️",
-            main_menu_buttons()
+            main_menu_buttons(user_id)
         )
     else:
         name = user.get("church_name") or first_name
         await send_message(chat_id,
             f"☦️ С возвращением, {name}!\n\nРад видеть вас снова 🕊️\n\nЧем могу помочь?\n\n📢 Наш канал → https://max.ru/-75405929805299",
-            main_menu_buttons()
+            main_menu_buttons(user_id)
         )
 
 async def handle_callback(chat_id, user_id, payload, first_name=""):
     touch_user_session(user_id, "MAX", target=payload)
     touch_funnel_user(user_id, "MAX", increment_visit=False)
-    if payload in {"notifications_yes", "prayer_for_me", "find_church", "ask_question", "profile", "journey_stop", "invite_friend", "review", "donate"}:
+    if payload in {"notifications_yes", "prayer_for_me", "find_church", "ask_question", "situation_review", "profile", "journey_stop", "invite_friend", "review", "donate"}:
         track_funnel_event(user_id, "MAX", "next_step_clicked", target=payload)
     if await handle_funnel_callback_max(chat_id, user_id, payload, first_name):
         return
@@ -2501,8 +3445,19 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
             await send_message(chat_id, "Отправка ответа отменена.")
         return
 
+    # Кабинет владельца: read-only аналитика, доступ только OWNER_ID.
+    if payload.startswith("owner_cab:"):
+        if int(user_id) != int(OWNER_ID):
+            # Обычный пользователь не должен видеть данные кабинета владельца.
+            return
+        section = payload.split(":", 1)[1]
+        text = await owner_cabinet_section_text(section)
+        kb = owner_cabinet_menu_kb() if section == "home" else owner_cabinet_section_kb(section)
+        await send_message(chat_id, text, kb)
+        return
+
     if payload == "main_menu":
-        await send_message(chat_id, "☦️ Главное меню:", main_menu_buttons())
+        await send_message(chat_id, "☦️ Главное меню:", main_menu_buttons(user_id))
 
     elif payload == "prayers":
         await send_message(chat_id, "🙏 Выберите молитву:", prayers_buttons())
@@ -2881,6 +3836,121 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
             [btn("◀️ Главное меню", "main_menu")],
         ])
 
+    elif payload in {"situation_review", "situation_review_write"}:
+        set_step(user_id, "situation_review")
+        track_funnel_event(user_id, "MAX", "situation_review_open", target="situation_review")
+        await send_message(chat_id, SITUATION_REVIEW_INTRO, situation_review_buttons())
+
+    elif payload == "situation_review_prayer":
+        track_funnel_event(user_id, "MAX", "situation_review_prayer_click", target="prayer_for_me")
+        await handle_callback(chat_id, user_id, "prayer_for_me", first_name)
+
+    elif payload == "situation_review_support":
+        track_funnel_event(user_id, "MAX", "situation_review_support_click", target="donate")
+        await handle_callback(chat_id, user_id, "donate", first_name)
+
+    elif payload == "spiritual_week":
+        track_funnel_event(user_id, "MAX", "spiritual_week_open", target="spiritual_week")
+        await send_message(chat_id, SPIRITUAL_WEEK_INTRO, spiritual_week_theme_buttons())
+
+    elif payload.startswith("sw_theme:"):
+        theme_key = payload.split(":", 1)[1]
+        if theme_key in SPIRITUAL_WEEK_THEMES:
+            track_funnel_event(user_id, "MAX", "spiritual_week_theme_selected", target=theme_key)
+            await send_message(chat_id, spiritual_week_confirm_text(theme_key), spiritual_week_confirm_buttons(theme_key))
+
+    elif payload.startswith("sw_start:"):
+        theme_key = payload.split(":", 1)[1]
+        if theme_key in SPIRITUAL_WEEK_THEMES:
+            spiritual_week_start(user_id, theme_key)
+            track_funnel_event(user_id, "MAX", "spiritual_week_started", target=theme_key)
+            track_funnel_event(user_id, "MAX", "spiritual_week_day_viewed", target=theme_key, value="1")
+            await send_message(chat_id, spiritual_week_day_text(theme_key, 1), spiritual_week_day_buttons(theme_key, 1))
+
+    elif payload.startswith("sw_done:"):
+        _, theme_key, day_s = payload.split(":", 2)
+        track_funnel_event(user_id, "MAX", "spiritual_week_day_done", target=theme_key, value=day_s)
+        await send_message(chat_id, "Записал. Пусть это останется маленьким шагом сегодня 🕯️")
+
+    elif payload.startswith("sw_next:"):
+        _, theme_key, day_s = payload.split(":", 2)
+        if theme_key in SPIRITUAL_WEEK_THEMES:
+            try:
+                day = int(day_s)
+            except ValueError:
+                day = 1
+            next_day = day + 1
+            if next_day > 7:
+                spiritual_week_set_day(user_id, 7, status="completed")
+                track_funnel_event(user_id, "MAX", "spiritual_week_completed", target=theme_key)
+                await send_message(chat_id, SPIRITUAL_WEEK_COMPLETE_TEXT, spiritual_week_complete_buttons())
+            else:
+                spiritual_week_set_day(user_id, next_day, status="active")
+                track_funnel_event(user_id, "MAX", "spiritual_week_day_viewed", target=theme_key, value=str(next_day))
+                await send_message(chat_id, spiritual_week_day_text(theme_key, next_day), spiritual_week_day_buttons(theme_key, next_day))
+
+    elif payload == "sw_prayer":
+        track_funnel_event(user_id, "MAX", "spiritual_week_prayer_click", target="prayer_for_me")
+        await handle_callback(chat_id, user_id, "prayer_for_me", first_name)
+
+    elif payload == "sw_situation":
+        track_funnel_event(user_id, "MAX", "spiritual_week_situation_click", target="situation_review")
+        await handle_callback(chat_id, user_id, "situation_review", first_name)
+
+    elif payload == "sw_support":
+        track_funnel_event(user_id, "MAX", "spiritual_week_support_click", target="donate")
+        await handle_callback(chat_id, user_id, "donate", first_name)
+
+    elif payload == "my_sunday":
+        track_funnel_event(user_id, "MAX", "sunday_companion_open", target="my_sunday")
+        sunday = nearest_sunday()
+        data = await get_sunday_companion(sunday)
+        if not data:
+            logging.warning(f"sunday_companion: недоступно для {sunday.isoformat()}")
+            await send_message(chat_id, MY_SUNDAY_UNAVAILABLE_TEXT, back_main())
+        else:
+            await send_message(chat_id, sunday_companion_text(sunday, data), my_sunday_buttons(bool(data.get("gospel_url"))))
+
+    elif payload == "my_sunday_gospel":
+        track_funnel_event(user_id, "MAX", "sunday_companion_gospel_click", target="gospel_link")
+        sunday = nearest_sunday()
+        data = await get_sunday_companion(sunday)
+        if not data or not data.get("gospel_url"):
+            await send_message(chat_id, MY_SUNDAY_UNAVAILABLE_TEXT, back_main())
+        else:
+            await send_message(
+                chat_id,
+                f"📖 {data['gospel_ref']}\n\nОткрыть точный текст этого чтения:",
+                [[link_btn("Открыть на azbyka.ru", data["gospel_url"])], [btn("🏠 В меню", "main_menu")]],
+            )
+
+    elif payload == "my_sunday_loved_ones":
+        track_funnel_event(user_id, "MAX", "sunday_companion_loved_ones_click", target="loved_ones")
+        await handle_callback(chat_id, user_id, "loved_ones", first_name)
+
+    elif payload == "my_sunday_situation":
+        track_funnel_event(user_id, "MAX", "sunday_companion_situation_click", target="situation_review")
+        await handle_callback(chat_id, user_id, "situation_review", first_name)
+
+    elif payload == "my_sunday_prepare":
+        track_funnel_event(user_id, "MAX", "sunday_companion_prepare_open", target="my_sunday_prepare")
+        sunday = nearest_sunday()
+        data = await get_sunday_companion(sunday)
+        await send_message(chat_id, MY_SUNDAY_PREPARE_TEXT, my_sunday_prepare_buttons(bool(data and data.get("gospel_url"))))
+
+    elif payload == "my_sunday_done":
+        track_funnel_event(user_id, "MAX", "sunday_companion_prepared", target="my_sunday_prepare")
+        await send_message(chat_id, "Что сегодня особенно отозвалось?", my_sunday_reflection_buttons())
+
+    elif payload.startswith("my_sunday_reflect:"):
+        option = payload.split(":", 1)[1]
+        track_funnel_event(user_id, "MAX", "sunday_companion_reflection_selected", target=option)
+        if option == "situation":
+            await handle_callback(chat_id, user_id, "my_sunday_situation", first_name)
+        else:
+            label = MY_SUNDAY_REFLECT_LABELS.get(option, option)
+            await send_message(chat_id, f"Записал: «{label}». Пусть это останется с вами 🕯️", back_main())
+
     elif payload in ("q_short", "q_medium", "q_deep"):
         depth_map = {"q_short": "short", "q_medium": "medium", "q_deep": "deep"}
         set_step(user_id, f"question_{depth_map[payload]}")
@@ -2894,6 +3964,26 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
             "✏️ Напишите сумму в рублях и я создам ссылку для оплаты 👇",
             back_main()
         )
+
+    elif payload == "donation_broadcast_support":
+        if not donation_broadcast_click_allowed_max(user_id):
+            return
+        track_funnel_event(user_id, "MAX", "donation_broadcast_support_click", target="donation_broadcast")
+        await handle_callback(chat_id, user_id, "donate", first_name)
+
+    elif payload == "donation_broadcast_later":
+        if not donation_broadcast_click_allowed_max(user_id):
+            return
+        track_funnel_event(user_id, "MAX", "donation_broadcast_later_click", target="donation_broadcast")
+        await send_message(chat_id, "Спасибо 🙏 Пусть православный помощник и дальше будет для вас тихой поддержкой.")
+
+    elif payload == "sw_bcast_open":
+        track_funnel_event(user_id, "MAX", "broadcast_spiritual_week_open_click", source=SPIRITUAL_WEEK_BROADCAST_MARKER, target="spiritual_week")
+        await handle_callback(chat_id, user_id, "spiritual_week", first_name)
+
+    elif payload == "sw_bcast_support":
+        track_funnel_event(user_id, "MAX", "broadcast_spiritual_week_support_click", source=SPIRITUAL_WEEK_BROADCAST_MARKER, target="donate")
+        await handle_callback(chat_id, user_id, "donate", first_name)
 
     elif payload == "review":
         set_step(user_id, "review")
@@ -2916,7 +4006,7 @@ async def handle_callback(chat_id, user_id, payload, first_name=""):
         )
 
     else:
-        await send_message(chat_id, "☦️ Главное меню:", main_menu_buttons())
+        await send_message(chat_id, "☦️ Главное меню:", main_menu_buttons(user_id))
 
 def delete_user_data(user_id: int, platform: str):
     """Deletes user-owned data and anonymises accounting rows."""
@@ -3031,6 +4121,10 @@ async def handle_text(chat_id, user_id, text, first_name=""):
         return
     if int(user_id) == int(OWNER_ID) and owner_command in {"/funnel_sources", "источники воронки"}:
         await send_message(chat_id, funnel_source_report_text("MAX", 30))
+        return
+    if int(user_id) == int(OWNER_ID) and owner_command in {"/donation_broadcast_preview", "предпросмотр донат рассылки"}:
+        await send_message(chat_id, DONATION_BROADCAST_TEXT, donation_broadcast_buttons())
+        track_funnel_event(user_id, "MAX", "donation_broadcast_preview_sent", target="donation_broadcast")
         return
     if int(user_id) == int(OWNER_ID) and owner_command in {
         "/channel_status", "канал статус"
@@ -3280,6 +4374,41 @@ async def handle_text(chat_id, user_id, text, first_name=""):
         await send_message(chat_id, f"🗺️ Православные храмы в городе {city}:\n\n{maps_url}", back_main())
         return
 
+    if step in {"situation_review", "situation_review_clarify"}:
+        if step == "situation_review":
+            track_funnel_event(user_id, "MAX", "situation_review_started", target="situation_review")
+        if SITUATION_CRISIS_RE.search(text):
+            set_step(user_id, "idle")
+            SITUATION_REVIEW_PENDING.pop(user_id, None)
+            track_funnel_event(user_id, "MAX", "situation_review_completed", target="situation_review", value="crisis")
+            await send_message(chat_id, situation_review_crisis_text(), situation_review_result_buttons())
+            return
+        if step == "situation_review" and needs_situation_clarification(text):
+            SITUATION_REVIEW_PENDING[user_id] = text[:3500]
+            set_step(user_id, "situation_review_clarify")
+            await send_message(
+                chat_id,
+                "Что сейчас тяжелее всего: вина, обида, страх, непонимание, как поступить, или что-то другое?\n\n"
+                "Можно ответить одним сообщением и чуть подробнее описать саму ситуацию.",
+                back_main()
+            )
+            return
+        await send_message(chat_id, "🕊️ Разбираю спокойно...")
+        if step == "situation_review_clarify":
+            first_text = SITUATION_REVIEW_PENDING.pop(user_id, "")
+            review_text = f"{first_text}\n\nУточнение: {text}" if first_text else text
+        else:
+            SITUATION_REVIEW_PENDING.pop(user_id, None)
+            review_text = text
+        answer = await ask_situation_review(review_text)
+        set_step(user_id, "idle")
+        if answer == "error":
+            await send_message(chat_id, "⚠️ Не удалось разобрать ситуацию. Попробуйте чуть позже.", situation_review_buttons())
+            return
+        track_funnel_event(user_id, "MAX", "situation_review_completed", target="situation_review")
+        await send_message(chat_id, answer, situation_review_result_buttons())
+        return
+
     if step == "prayer_for_me_name":
         set_step(user_id, "idle")
         await send_message(chat_id, "🙏 Молюсь... составляю молитву...")
@@ -3367,7 +4496,7 @@ async def handle_text(chat_id, user_id, text, first_name=""):
             await send_message(
                 chat_id,
                 "✅ Спасибо, сообщение отправлено.\n\nМы проверим проблему и постараемся исправить её как можно скорее.",
-                main_menu_buttons(),
+                main_menu_buttons(user_id),
             )
         else:
             await send_message(chat_id, "⚠️ Не удалось отправить сообщение. Попробуйте ещё раз немного позже.", back_main())
@@ -3511,7 +4640,7 @@ async def handle_text(chat_id, user_id, text, first_name=""):
             ])
         return
 
-    await send_message(chat_id, "☦️ Главное меню:", main_menu_buttons())
+    await send_message(chat_id, "☦️ Главное меню:", main_menu_buttons(user_id))
 
 async def handle_photo(chat_id, user_id, photo_token):
     user = get_user(user_id)
@@ -3577,7 +4706,7 @@ async def morning_broadcast_max():
     """Утренняя рассылка всем пользователям MAX у кого включены уведомления"""
     conn = db_connect()
     c = conn.cursor()
-    c.execute("SELECT user_id, church_name FROM users WHERE notifications=1")
+    c.execute("SELECT user_id, church_name, max_chat_id FROM users WHERE notifications=1")
     users = c.fetchall()
     conn.close()
     prayer = await get_prayer_of_day_max()
@@ -3586,14 +4715,21 @@ async def morning_broadcast_max():
     feast_line = ("🎉 " + feast + "\n\n") if feast else ""
     text = "🌅 Доброе утро, " + day_str + "!\n\n" + feast_line + "☦️ Молитва дня\n\n" + prayer + "\n\n─────────────────\n☦️ Православный помощник → @id232007136009_1_bot"
     sent = 0
-    for user_id, name in users:
+    failed = 0
+    skipped_no_chat_id = 0
+    for user_id, name, max_chat_id in users:
+        if not max_chat_id:
+            skipped_no_chat_id += 1
+            continue
         try:
-            await max_request("POST", f"messages?chat_id={user_id}", {"text": text})
-            sent += 1
+            if await send_proactive_max(max_chat_id, text):
+                sent += 1
+            else:
+                failed += 1
             await asyncio.sleep(0.1)
         except Exception:
-            pass
-    logging.info(f"MAX утренняя рассылка: {sent} из {len(users)}")
+            failed += 1
+    logging.info(f"MAX утренняя рассылка: sent={sent} failed={failed} skipped_no_chat_id={skipped_no_chat_id} из {len(users)}")
 
 async def angel_reminder_loop_max():
     """Напоминает только пользователям, которые явно включили уведомления."""
@@ -3606,19 +4742,22 @@ async def angel_reminder_loop_max():
             last_run = run_key
             conn = db_connect()
             users = conn.execute(
-                "SELECT user_id,church_name,angel_day FROM users "
+                "SELECT user_id,church_name,angel_day,max_chat_id FROM users "
                 "WHERE notifications=1 AND angel_day<>'' AND angel_day IS NOT NULL"
             ).fetchall()
             conn.close()
-            for user_id, name, angel_day in users:
+            for user_id, name, angel_day, max_chat_id in users:
+                if not max_chat_id:
+                    logging.info(f"Angel reminder MAX: skipped_no_chat_id user_id={user_id}")
+                    continue
                 try:
                     day = datetime.strptime(angel_day.split(" ")[0], "%d.%m").replace(year=now_msk.year)
                     diff = (day.date() - now_msk.date()).days
                     if diff < 0:
                         diff = (day.replace(year=now_msk.year + 1).date() - now_msk.date()).days
                     if diff == 3:
-                        await send_message(
-                            user_id,
+                        await send_proactive_max(
+                            max_chat_id,
                             (
                                 "🕊️ Через 3 дня — возможная дата памяти вашего небесного покровителя:\n\n"
                                 f"{angel_day}\n\n"
@@ -3626,8 +4765,8 @@ async def angel_reminder_loop_max():
                             ),
                         )
                     elif diff == 0:
-                        await send_message(
-                            user_id,
+                        await send_proactive_max(
+                            max_chat_id,
                             (
                                 "👼 Сегодня возможная дата памяти вашего небесного покровителя, "
                                 f"{name or 'друг'}:\n\n{angel_day}\n\n"
@@ -3706,13 +4845,24 @@ def save_post_source(post_key: str, source: str, variant: str):
         logging.error(f"Post source save error: {e}")
 
 
+_CHANNEL_DECORATIVE_LINE_RE = re.compile(r"^[ \t–—―_.*•·~=─━●○◦▪▫✦✧★☆∙-]+$")
+
+
+def _strip_trailing_decorative_lines(text: str) -> str:
+    """Убирает декоративные разделители (линии, точки, звёздочки) перед CTA."""
+    lines = (text or "").rstrip().split("\n")
+    while lines and (not lines[-1].strip() or _CHANNEL_DECORATIVE_LINE_RE.match(lines[-1])):
+        lines.pop()
+    return "\n".join(lines).rstrip()
+
+
 def get_channel_cta(cta_key: str, source_override: str = ""):
     footer, button, source = CHANNEL_CTA.get(cta_key, CHANNEL_CTA["guidance"])
     source = source_override or source
     if source_override.endswith("b"):
         button = CHANNEL_CTA_B_LABELS.get(cta_key, button)
     deep_link = f"{MAX_BOT_URL}?start={source}"
-    return "\n\n─────────────────\n" + footer, [[link_btn(button, deep_link)]], deep_link
+    return "\n\n" + footer, [[link_btn(button, deep_link)]], deep_link
 
 
 def channel_post_exists(post_key: str) -> bool:
@@ -3768,6 +4918,126 @@ def recent_channel_topics(limit: int = 30) -> str:
 def extract_topic(text: str) -> str:
     clean = " ".join((text or "").replace("\n", " ").split())
     return clean[:180]
+
+
+# --- Антидублирование канальных постов (сравнение по нормализованному тексту) ---
+
+_CHANNEL_DUP_STOPWORDS = set(
+    "и в не на с о у к из для а но что это как я мы вы они он она за при по от до же ли или "
+    "так там где когда чтобы если бы уже ещё быть есть был была было были наш ваш свой этот эта "
+    "эти тот та те его её их нам вам им".split()
+)
+
+CHANNEL_DUP_BODY_THRESHOLD = 0.30
+CHANNEL_DUP_TITLE_THRESHOLD = 0.75
+CHANNEL_DUP_TITLE_BODY_MIN = 0.20
+
+_CHANNEL_KNOWN_FOOTERS = tuple(
+    sorted({str(f[0]).strip() for f in CHANNEL_CTA.values() if f and f[0]}, key=len, reverse=True)
+)
+
+
+def _channel_dup_tokens(text: str):
+    value = (text or "").lower()
+    value = re.sub(r"[^\w\s]+", " ", value, flags=re.UNICODE)
+    return [w for w in value.split() if len(w) > 2 and w not in _CHANNEL_DUP_STOPWORDS]
+
+
+def _channel_dup_similarity(a: str, b: str) -> float:
+    ta, tb = _channel_dup_tokens(a), _channel_dup_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return difflib.SequenceMatcher(None, sorted(ta), sorted(tb)).ratio()
+
+
+def _channel_split_title_body(text: str):
+    parts = (text or "").split("\n\n", 1)
+    title = parts[0].strip()
+    body = parts[1].strip() if len(parts) > 1 else (text or "").strip()
+    return title, body
+
+
+def _channel_strip_known_footer(text: str) -> str:
+    value = (text or "").rstrip()
+    for footer in _CHANNEL_KNOWN_FOOTERS:
+        if footer and value.endswith(footer):
+            return value[: -len(footer)].rstrip()
+    return value
+
+
+def recent_channel_history(days: int = 60, min_count: int = 150):
+    """История опубликованных текстов минимум за 60 дней или 150 последних постов — для антидублирования."""
+    try:
+        conn = db_connect()
+        cutoff = (datetime.now() - timedelta(days=days)).isoformat()
+        rows = conn.execute(
+            """SELECT rubric, topic, content FROM channel_posts
+               WHERE status='sent' AND COALESCE(message_id,'')<>'' AND created_at>=?
+               ORDER BY created_at DESC""",
+            (cutoff,),
+        ).fetchall()
+        if len(rows) < min_count:
+            rows = conn.execute(
+                """SELECT rubric, topic, content FROM channel_posts
+                   WHERE status='sent' AND COALESCE(message_id,'')<>''
+                   ORDER BY created_at DESC LIMIT ?""",
+                (min_count,),
+            ).fetchall()
+        conn.close()
+        return rows
+    except Exception as e:
+        logging.error(f"Канал MAX: не удалось прочитать историю антидублирования: {e}")
+        return []
+
+
+def _is_channel_text_duplicate(candidate_text: str, history_rows):
+    """Сравнивает нормализованные заголовок и текст кандидата с недавней историей (без CTA/эмодзи/оформления)."""
+    cand_title, cand_body = _channel_split_title_body(candidate_text)
+    for _rubric_hist, _topic_hist, content_hist in history_rows:
+        hist_clean = _channel_strip_known_footer(content_hist or "")
+        if not hist_clean:
+            continue
+        hist_title, hist_body = _channel_split_title_body(hist_clean)
+        body_ratio = _channel_dup_similarity(cand_body, hist_body)
+        if body_ratio >= CHANNEL_DUP_BODY_THRESHOLD:
+            return True, hist_clean[:180]
+        title_ratio = _channel_dup_similarity(cand_title, hist_title)
+        if title_ratio >= CHANNEL_DUP_TITLE_THRESHOLD and body_ratio >= CHANNEL_DUP_TITLE_BODY_MIN:
+            return True, hist_clean[:180]
+    return False, ""
+
+
+CHANNEL_EDGE_SIMILARITY_THRESHOLD = 0.72
+CHANNEL_EDGE_HISTORY_SAMPLE = 6
+
+
+def _channel_edge_similarity(a: str, b: str) -> float:
+    na, nb = _normalized_channel_text(a), _normalized_channel_text(b)
+    if not na or not nb:
+        return 0.0
+    return difflib.SequenceMatcher(None, na, nb).ratio()
+
+
+def _channel_opening_or_closing_repeats(candidate_text: str, rubric: str, history_rows) -> bool:
+    """Сравнивает начало (150 симв.) и финал (250 симв.) кандидата с недавними постами той же рубрики,
+    чтобы не повторялась одна и та же конструкция начала/конца день за днём."""
+    cand = (candidate_text or "").strip()
+    cand_open, cand_close = cand[:150], cand[-250:]
+    checked = 0
+    for hist_rubric, _topic_hist, content_hist in history_rows:
+        if hist_rubric != rubric:
+            continue
+        hist_clean = _channel_strip_known_footer(content_hist or "").strip()
+        if not hist_clean:
+            continue
+        if _channel_edge_similarity(cand_open, hist_clean[:150]) >= CHANNEL_EDGE_SIMILARITY_THRESHOLD:
+            return True
+        if _channel_edge_similarity(cand_close, hist_clean[-250:]) >= CHANNEL_EDGE_SIMILARITY_THRESHOLD:
+            return True
+        checked += 1
+        if checked >= CHANNEL_EDGE_HISTORY_SAMPLE:
+            break
+    return False
 
 
 def _extract_upload_token(payload):
@@ -3940,12 +5210,22 @@ def _split_readable_paragraphs(paragraphs, max_paragraph_len: int = 330):
     return result
 
 
-CHANNEL_ADDRESS_VARIANTS = (
-    "Дорогие братья и сестры,",
-    "Дорогие друзья,",
-    "Родные во Христе,",
-    "Братья и сестры,",
-    "Дорогие читатели,",
+CHANNEL_FORBIDDEN_GREETINGS = (
+    "дорогие братья и сестры",
+    "дорогие друзья",
+    "родные во христе",
+    "братья и сестры",
+    "дорогие читатели",
+)
+
+CHANNEL_FORBIDDEN_CLOSINGS = (
+    "пусть этот день будет",
+    "пусть день будет прожит",
+    "пусть господь дарует",
+    "пусть эта ночь",
+    "пусть ночь принесет",
+    "пусть ночь принесёт",
+    "будем бережны друг к другу",
 )
 
 CHANNEL_FORBIDDEN_SNIPPETS = (
@@ -3962,17 +5242,6 @@ CHANNEL_SECOND_PERSON_TOKENS = (
 
 def _normalized_channel_text(text: str) -> str:
     return " ".join((text or "").lower().replace("ё", "е").split())
-
-
-def _channel_address_variant(cta_key: str, rubric: str, seed_text: str = "") -> str:
-    seed = f"{cta_key}|{rubric}|{seed_text[:80]}"
-    idx = sum(ord(ch) for ch in seed) % len(CHANNEL_ADDRESS_VARIANTS)
-    return CHANNEL_ADDRESS_VARIANTS[idx]
-
-
-def _channel_has_address(text: str) -> bool:
-    normalized = _normalized_channel_text(text)
-    return any(addr.lower().replace("ё", "е").rstrip(",") in normalized for addr in CHANNEL_ADDRESS_VARIANTS)
 
 
 def _channel_has_forbidden_snippet(text: str) -> bool:
@@ -3996,6 +5265,18 @@ def _channel_looks_truncated(text: str) -> bool:
     return stripped[-1] not in ".!?…»\""
 
 
+def _channel_has_forbidden_greeting(text: str) -> bool:
+    """Проверяет первые ~150 символов поста на запрещённое шаблонное приветствие."""
+    normalized = _normalized_channel_text(text)[:150]
+    return any(greeting in normalized for greeting in CHANNEL_FORBIDDEN_GREETINGS)
+
+
+def _channel_has_forbidden_closing(text: str) -> bool:
+    """Проверяет финал основного текста (до CTA) на шаблонную концовку."""
+    tail = _normalized_channel_text((text or "").strip()[-250:])
+    return any(closing in tail for closing in CHANNEL_FORBIDDEN_CLOSINGS)
+
+
 def _channel_post_is_valid(text: str, cta_key: str) -> bool:
     if len((text or "").strip()) < 80:
         return False
@@ -4005,31 +5286,24 @@ def _channel_post_is_valid(text: str, cta_key: str) -> bool:
         return False
     if _channel_looks_truncated(text):
         return False
-    if cta_key in ("morning", "evening") and not _channel_has_address(text):
+    if _channel_has_forbidden_greeting(text):
+        return False
+    if _channel_has_forbidden_closing(text):
         return False
     return True
-
-
-def _inject_channel_address(title: str, body_paragraphs, cta_key: str, rubric: str):
-    if cta_key not in ("morning", "evening"):
-        return body_paragraphs
-    joined = "\n".join(body_paragraphs[:2])
-    if _channel_has_address(joined):
-        return body_paragraphs
-    return [_channel_address_variant(cta_key, rubric, title)] + body_paragraphs
 
 
 def compose_channel_publication_text(body_text: str, footer_text: str, limit: int) -> str:
     body = clean_channel_markup(body_text)
     footer = clean_channel_markup(footer_text).strip()
-    separator = "\n\n─────────────────\n"
+    separator = "\n\n"
     extra = len(separator) + len(footer) if footer else 0
     allowed = max(120, limit - extra)
-    safe_body = _shorten_at_sentence(body, allowed)
+    safe_body = _strip_trailing_decorative_lines(_shorten_at_sentence(body, allowed))
     final = f"{safe_body}{separator}{footer}" if footer else safe_body
     final = re.sub(r"\n\d+\s*$", "", final).strip()
     if len(final) > limit:
-        safe_body = _shorten_at_sentence(body, max(120, allowed - 40))
+        safe_body = _strip_trailing_decorative_lines(_shorten_at_sentence(body, max(120, allowed - 40)))
         final = f"{safe_body}{separator}{footer}" if footer else safe_body
         final = re.sub(r"\n\d+\s*$", "", final).strip()
     return final
@@ -4067,7 +5341,6 @@ def polish_channel_text(
         title = f"{emoji} {title}"
 
     body_paragraphs = _split_readable_paragraphs(body_paragraphs)
-    body_paragraphs = _inject_channel_address(title, body_paragraphs, cta_key, rubric)
     body_paragraphs = body_paragraphs[:5]
     if not body_paragraphs and cleaned:
         source = cleaned
@@ -4075,7 +5348,6 @@ def polish_channel_text(
             source = source[len(title.replace(f"{emoji} ", "")):].lstrip(" .:—-\n")
         if source:
             body_paragraphs = _split_readable_paragraphs([source])[:5]
-            body_paragraphs = _inject_channel_address(title, body_paragraphs, cta_key, rubric)
 
     result = title
     if body_paragraphs:
@@ -4091,13 +5363,13 @@ def polish_channel_text(
 
 
 FALLBACK_POSTS = {
-    "morning": "Доброе начало дня\n\nДорогие братья и сестры,\n\nпусть это утро начнётся с короткой молитвы и спокойной памяти о Боге. Новый день дан нам не для суеты и раздражения, а для добрых слов, верности в малом и мирного сердца.\n\nПопросим Господа укрепить нас в делах, сохранить от поспешных слов и помочь не пройти мимо человека, которому сегодня нужна поддержка.\n\nПусть этот день будет прожит с благодарностью, терпением и надеждой на Божию помощь.",
+    "morning": "Доброе начало дня\n\nНовый день редко начинается с полной готовности к нему — чаще с усталости, тревожных мыслей или спешки. И всё же есть смысл на минуту остановиться и вспомнить о Боге прежде, чем начнутся дела.\n\nПопросим Господа укрепить нас сегодня: сохранить от поспешных слов, дать терпение в мелочах и помочь не пройти мимо человека, которому нужна поддержка.\n\nДаже один спокойный поступок сегодня может оказаться важнее десяти правильных слов.",
     "quote": "✝️ Мир в душе начинается с внимания к собственному сердцу. Прежде чем осудить другого, остановимся и попросим у Бога кротости и рассудительности.",
     "saint": "👼 Святитель Лука Крымский был хирургом и архиереем. Даже в годы ссылок он продолжал лечить людей и сохранять верность своему служению. Его пример напоминает: вера не уводит от ответственности, а помогает честно делать необходимое для другого человека.",
     "guidance": "🕯️ Когда молитва не идёт, не нужно отчаиваться. Скажите Богу несколько простых слов своими словами и останьтесь в тишине. Верность важнее сильных чувств.",
     "practical": "⛪ Первый шаг в храме не требует идеальной подготовки. Придите немного заранее, встаньте там, где удобно, и спокойно наблюдайте за службой. Если что-то непонятно, после богослужения можно вежливо спросить служителя храма.",
     "story": "👼 После личной трагедии преподобномученица Елисавета Феодоровна посвятила себя помощи больным и бедным. Её история показывает: боль может не только замкнуть сердце, но и стать началом деятельного милосердия.",
-    "evening": "Тихий итог дня\n\nДорогие братья и сестры,\n\nк вечеру особенно важно остановиться, поблагодарить Бога за прожитый день и отпустить всё лишнее, что тревожит сердце. Не всё получилось так, как хотелось, но каждый день можно завершить с миром и надеждой.\n\nПопросим у Господа прощения за ошибки, помолимся о близких и передадим Богу всё, что не можем исправить прямо сейчас.\n\nПусть эта ночь принесёт покой душе, а завтрашний день станет новым тихим шансом на добро.",
+    "evening": "Тихий итог дня\n\nК вечеру яснее слышно то, что весь день откладывалось: усталость, невысказанная обида, невыполненное дело. Можно ничего не приукрашивать и просто остановиться на несколько минут.\n\nПопросим у Господа прощения за раздражение и поспешные слова, помолимся о близких и оставим Ему то, что сегодня уже не в наших силах исправить.\n\nЗавтрашний день начнётся заново — и это тоже милость, а не что-то само собой разумеющееся.",
     "qa": "❓ Можно ли молиться своими словами? Да. Церковные молитвы учат нас, но Господь слышит и искреннее обращение сердца. Говорите просто, честно и с доверием.",
     "life": "📖 Праведный Иоанн Кронштадтский не ограничивался словами о сострадании: он посещал бедные семьи и помогал создавать возможность для труда. Его пример задаёт простой вопрос: во что сегодня может превратиться наше сочувствие?",
     "film": "📽️ Для семейного просмотра выберите проверенный документальный фильм о православных святынях или истории монастыря. После просмотра обсудите, какая мысль особенно затронула каждого.",
@@ -4107,6 +5379,21 @@ FALLBACK_POSTS = {
     "showcase_confession": "📿 Первая исповедь часто пугает неизвестностью. В помощнике есть спокойная пошаговая памятка: как подготовиться, что говорить и как проходит Таинство.",
     "interactive": "💬 Какую тему разобрать следующей: молитву, первую исповедь, день ангела или внутреннюю тревогу? Выберите вариант — канал будет развиваться по реальным запросам читателей.",
     "community": "🕊️ Один из пользователей поделился, что помощник помог спокойнее сделать первый шаг к церковной жизни. Иногда человеку нужна не длинная лекция, а понятный следующий шаг и бережная поддержка.",
+}
+
+# Несколько вариантов fallback-текста для ежедневных утренних/вечерних слотов,
+# чтобы при повторных сбоях генерации не публиковался постоянно один и тот же текст.
+FALLBACK_POST_VARIANTS = {
+    "morning": [
+        FALLBACK_POSTS["morning"],
+        "Свет нового утра\n\nИногда утро начинается не с тишины, а с длинного списка дел, которые ещё не начались, а уже тревожат. Стоит на минуту остановиться и вспомнить, что день дан не только для забот.\n\nПопросим Господа о терпении в мелочах, о мире в семье и о внимании к тому, кому сегодня нужно доброе слово.\n\nЧасто именно маленькое, незаметное дело оказывается самым нужным за весь день.",
+        "Тихая благодарность утра\n\nНе каждое утро хочется вставать с благодарностью — иногда первая мысль совсем другая. Можно начать день честно: попросить у Бога сил, а не притворяться, что всё уже легко.\n\nПопробуем сегодня сдержать резкое слово, заметить усталость близкого человека и ответить не раздражением, а терпением.\n\nК вечеру станет видно, получилось ли — и это тоже часть пути, а не повод для уныния.",
+    ],
+    "evening": [
+        FALLBACK_POSTS["evening"],
+        "Вечерняя благодарность\n\nКогда день подходит к концу, легко вспомнить только усталость и то, что не получилось. Но было и другое — чьё-то доброе слово, помощь ближнему, минута тишины перед иконой.\n\nПопросим у Господа прощения за раздражение и поспешные слова, помолимся о родных и оставим Ему то, что не в силах исправить сами.\n\nИногда именно такой честный итог дня и есть настоящая молитва.",
+        "Мир перед сном\n\nНе всегда получается отпустить обиды и тревоги дня перед сном — иногда они возвращаются снова и снова. Можно не бороться с этим в одиночку, а довериться Богу в том, что осталось незавершённым.\n\nПопросим Господа о прощении, помолимся о близких и поблагодарим за то доброе, что успели сделать сегодня.\n\nЗавтра будет ещё одна возможность — и этого достаточно, чтобы сейчас просто уснуть спокойно.",
+    ],
 }
 
 
@@ -4146,12 +5433,12 @@ def evening_channel_prompt(msk_now: datetime) -> str:
 async def generate_channel_post(prompt, cta_key, rubric, visual_prompt_note="", visual_title="", source_override=""):
     history = recent_channel_topics(35)
     history_note = f"\n\nНе повторяй эти недавние темы:\n{history}" if history else ""
+    dup_history_rows = recent_channel_history()
     visual_note = f"\n\n{visual_prompt_note}" if visual_prompt_note else ""
     length_rule = "620–860" if visual_prompt_note else "820–1120"
     special_rules = ""
     if cta_key in ("morning", "evening"):
         special_rules = (
-            "\nОбязательно обратись к читателям одним из вариантов: «Дорогие братья и сестры», «Дорогие друзья», «Родные во Христе», «Братья и сестры» или «Дорогие читатели»."
             " Не начинай текст или заголовок словами «Утро — время» и «Вечер — время»."
             " Не проси читателей назвать три вещи и не используй фразу «мы просыпаемся и сразу»."
             " Не обращайся к читателю на «ты» — только «мы» или «вы»."
@@ -4162,7 +5449,11 @@ async def generate_channel_post(prompt, cta_key, rubric, visual_prompt_note="", 
         "Опирайся на православную традицию. Не представляйся священником, не давай личных благословений, "
         "не выдумывай цитаты, факты, чудеса, фильмы или церковные правила. "
         "Каждый абзац должен быть коротким и легко читаться с телефона. "
-        "Не добавляй рекламу: компактный CTA добавит программа. Не используй Markdown-разметку."
+        "Не добавляй рекламу: компактный CTA добавит программа. Не используй Markdown-разметку. "
+        "Никогда не начинай текст с приветствия и не используй обращения «Дорогие братья и сестры», «Дорогие друзья», "
+        "«Родные во Христе», «Братья и сестры», «Дорогие читатели» или похожие по смыслу — начинай сразу с мысли, "
+        "наблюдения, короткой ситуации или образа. Не завершай текст шаблонной итоговой фразой вроде «Пусть этот день будет…», "
+        "«Пусть Господь дарует…», «Пусть эта ночь…» или «Будем бережны друг к другу…» — заверши мысль естественно и разными словами каждый раз."
     )
 
     validation_notes = [
@@ -4201,19 +5492,44 @@ async def generate_channel_post(prompt, cta_key, rubric, visual_prompt_note="", 
                 platform="max",
             )
             if _channel_post_is_valid(post_text, cta_key):
-                break
-            last_error = "не прошёл редакционную проверку"
-            logging.warning(f"Канал MAX: пост для {rubric} отклонён на попытке {attempt + 1}")
+                is_dup, dup_snippet = _is_channel_text_duplicate(post_text, dup_history_rows)
+                edge_repeat = not is_dup and _channel_opening_or_closing_repeats(post_text, rubric, dup_history_rows)
+                if not is_dup and not edge_repeat:
+                    break
+                last_error = "слишком похож на недавнюю публикацию"
+                if edge_repeat:
+                    history_note += (
+                        "\n\nПредыдущий вариант начинался или заканчивался почти так же, как недавние посты этой рубрики. "
+                        "Напиши другое начало и другое завершение текста."
+                    )
+                else:
+                    history_note += (
+                        f"\n\nПредыдущий вариант почти повторил недавно опубликованный текст: «{dup_snippet}». "
+                        "Напиши другими словами, с другим примером и без пересказа этого текста."
+                    )
+                logging.warning(f"Канал MAX: пост для {rubric} отклонён как повтор на попытке {attempt + 1}")
+            else:
+                last_error = "не прошёл редакционную проверку"
+                logging.warning(f"Канал MAX: пост для {rubric} отклонён на попытке {attempt + 1}")
         except Exception as e:
             last_error = str(e)
             logging.error(f"Канал MAX: генерация {rubric} не удалась на попытке {attempt + 1}: {e}")
     else:
-        fallback_text = FALLBACK_POSTS.get(cta_key, FALLBACK_POSTS["guidance"])
-        post_text = polish_channel_text(
-            fallback_text, cta_key, rubric,
-            has_visual=bool(visual_prompt_note or visual_title),
-            platform="max",
-        )
+        post_text = None
+        for fallback_raw in FALLBACK_POST_VARIANTS.get(cta_key, [FALLBACK_POSTS.get(cta_key, FALLBACK_POSTS["guidance"])]):
+            fallback_candidate = polish_channel_text(
+                fallback_raw, cta_key, rubric,
+                has_visual=bool(visual_prompt_note or visual_title),
+                platform="max",
+            )
+            is_dup, _ = _is_channel_text_duplicate(fallback_candidate, dup_history_rows)
+            if is_dup or _channel_opening_or_closing_repeats(fallback_candidate, rubric, dup_history_rows):
+                continue
+            post_text = fallback_candidate
+            break
+        if post_text is None:
+            logging.warning(f"Канал MAX: слот {rubric} пропущен — уникальный текст не найден (последняя причина: {last_error})")
+            return None, None, None, None
         logging.warning(f"Канал MAX: используется fallback для {rubric}: {last_error}")
 
     footer, buttons, deep_link = get_channel_cta(cta_key, source_override)
@@ -4494,6 +5810,10 @@ async def publish_channel_slot(msk_now: datetime, hour: int, rubric: str, cta_ke
             text, buttons, deep_link, topic = await generate_channel_post(
                 prompt, cta_key, rubric, visual_prompt_note="", visual_title="", source_override=source,
             )
+            if not text:
+                finalize_channel_publish_guard(post_key, "failed_locked", "", "anti-duplicate: no unique text after retries", "")
+                logging.warning(f"Канал MAX: слот {rubric} пропущен без публикации — уникальный текст не найден за 3 попытки — {post_key}")
+                return False
             save_post_source(post_key, source, variant)
             finalize_channel_publish_guard(post_key, "sending", topic, text, "")
             try:
@@ -4682,6 +6002,585 @@ def payments_report_text(platform: str) -> str:
         lines.extend(f"• {pid}: {amount} ₽, {created[:16]}{(' — '+err[:80]) if err else ''}" for pid,amount,created,err in pending)
     return "\n".join(lines)
 
+
+# ================== КАБИНЕТ ВЛАДЕЛЬЦА (read-only аналитика, доступ только OWNER_ID) ==================
+# Раздел не участвует в публичных пользовательских сценариях, автопостинге, платежах или watchdog.
+# Все запросы ниже — только SELECT по уже существующим таблицам.
+
+OWNER_CABINET_OWN_PLATFORM = "MAX"
+OWNER_CABINET_SIBLING_PLATFORM = "Telegram"
+OWNER_CABINET_SIBLING_HEARTBEAT = Path("/tmp/vera_telegram.heartbeat")
+OWNER_CABINET_MAX_HEALTH_URL = "http://127.0.0.1:8080/health"
+
+OWNER_CABINET_FEATURE_LABELS = {
+    "prayer_of_day": "✨ Молитва дня", "prayer_for_me": "🙏 Молитва по ситуации",
+    "prayer_evening_ru": "🌙 Вечерняя молитва", "prayer_morning_ru": "🌅 Утренняя молитва",
+    "prayers": "🙏 Молитвы", "saints": "👼 Святые", "saint_search": "👼 Поиск святого",
+    "daily_gospel": "📖 Евангельская мысль", "ask_question": "❓ Задать вопрос",
+    "situation_review": "🕊️ Разобрать ситуацию",
+    "photo_icon": "📸 Фото: икона", "photo_church": "📸 Фото: храм", "find_church": "🗺️ Найти храм",
+    "sacr_ispoved": "⛪ Таинства: исповедь", "sacr_prichaschenie": "⛪ Таинства: причастие",
+    "sacraments": "⛪ Таинства", "library": "📚 Библиотека", "favorites": "⭐ Избранное",
+    "profile_patron_prayer": "👼 Молитва покровителю", "donate": "🕯️ Пожертвование",
+}
+
+
+def _owner_scalar(conn, sql, params=()):
+    try:
+        row = conn.execute(sql, params).fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+    except Exception:
+        return None
+
+
+def _owner_fmt(value) -> str:
+    return "данных пока нет" if value is None else str(value)
+
+
+def _owner_sibling_conn():
+    try:
+        return sqlite3.connect(f"file:{OWNER_CABINET_SIBLING_DB_PATH}?mode=ro", uri=True, timeout=5)
+    except Exception as e:
+        logging.error(f"Кабинет владельца: соседняя база недоступна: {e}")
+        return None
+
+
+def owner_cabinet_platform_snapshot(conn, platform: str, cutoff_iso: str) -> dict:
+    """Read-only срез метрик по одной платформе для кабинета владельца."""
+    if conn is None:
+        return {}
+    return {
+        "new_users": _owner_scalar(conn, "SELECT COUNT(*) FROM user_funnel_state WHERE platform=? AND first_seen_at>=?", (platform, cutoff_iso)),
+        "total_users": _owner_scalar(conn, "SELECT COUNT(*) FROM user_funnel_state WHERE platform=?", (platform,)),
+        "channel_clicks": _owner_scalar(conn, "SELECT COUNT(*) FROM channel_clicks WHERE clicked_at>=?", (cutoff_iso,)),
+        "prayers": _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND target LIKE 'prayer%' AND created_at>=?", (platform, cutoff_iso)),
+        "loved_ones_clicks": _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND target='loved_ones' AND created_at>=?", (platform, cutoff_iso)),
+        "calendar_clicks": _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND target='calendar' AND created_at>=?", (platform, cutoff_iso)),
+        "questions": _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND target='ask_question' AND created_at>=?", (platform, cutoff_iso)),
+        "situation_open": _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='situation_review_open' AND created_at>=?", (platform, cutoff_iso)),
+        "situation_completed": _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='situation_review_completed' AND created_at>=?", (platform, cutoff_iso)),
+        "situation_prayer": _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='situation_review_prayer_click' AND created_at>=?", (platform, cutoff_iso)),
+        "situation_support": _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='situation_review_support_click' AND created_at>=?", (platform, cutoff_iso)),
+        "spiritual_week_open": _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='spiritual_week_open' AND created_at>=?", (platform, cutoff_iso)),
+        "spiritual_week_started": _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='spiritual_week_started' AND created_at>=?", (platform, cutoff_iso)),
+        "spiritual_week_completed": _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='spiritual_week_completed' AND created_at>=?", (platform, cutoff_iso)),
+        "spiritual_week_support": _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='spiritual_week_support_click' AND created_at>=?", (platform, cutoff_iso)),
+        "reviews": _owner_scalar(conn, "SELECT COUNT(*) FROM user_reviews WHERE created_at>=?", (cutoff_iso,)),
+        "problems": _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='problem_reported' AND created_at>=?", (platform, cutoff_iso)),
+        "donations_count": _owner_scalar(conn, "SELECT COUNT(*) FROM donation_payments WHERE platform=? AND status='succeeded' AND paid_at>=?", (platform, cutoff_iso)),
+        "donations_sum": _owner_scalar(conn, "SELECT COALESCE(SUM(amount),0) FROM donation_payments WHERE platform=? AND status='succeeded' AND paid_at>=?", (platform, cutoff_iso)),
+        "errors": _owner_scalar(conn, "SELECT COUNT(*) FROM critical_errors WHERE created_at>=?", (cutoff_iso,)),
+    }
+
+
+def owner_cabinet_today_text() -> str:
+    today_start = datetime.now().strftime("%Y-%m-%dT00:00:00")
+    own_conn = db_connect()
+    sibling_conn = _owner_sibling_conn()
+    try:
+        own = owner_cabinet_platform_snapshot(own_conn, OWNER_CABINET_OWN_PLATFORM, today_start)
+        sib = owner_cabinet_platform_snapshot(sibling_conn, OWNER_CABINET_SIBLING_PLATFORM, today_start)
+        return (
+            "👑 Кабинет владельца «С верой»\n\n"
+            "Сегодня:\n"
+            f"Новые TG: {_owner_fmt(own.get('new_users') if OWNER_CABINET_OWN_PLATFORM == 'Telegram' else sib.get('new_users'))}\n"
+            f"Новые MAX: {_owner_fmt(sib.get('new_users') if OWNER_CABINET_SIBLING_PLATFORM == 'MAX' else own.get('new_users'))}\n"
+            f"Клики из канала: {_owner_fmt(own.get('channel_clicks'))}\n"
+            f"Молитвы (действия): {_owner_fmt(own.get('prayers'))}\n"
+            f"Мои близкие (клики): {_owner_fmt(own.get('loved_ones_clicks'))}\n"
+            f"Календарь (клики): {_owner_fmt(own.get('calendar_clicks'))}\n"
+            f"Вопросы боту: {_owner_fmt(own.get('questions'))}\n"
+            f"Разбор ситуаций: открыли {_owner_fmt(own.get('situation_open'))}, завершили {_owner_fmt(own.get('situation_completed'))}, молитва {_owner_fmt(own.get('situation_prayer'))}, поддержка {_owner_fmt(own.get('situation_support'))}\n"
+            f"Духовная неделя: открыли {_owner_fmt(own.get('spiritual_week_open'))}, начали {_owner_fmt(own.get('spiritual_week_started'))}, завершили {_owner_fmt(own.get('spiritual_week_completed'))}, поддержка {_owner_fmt(own.get('spiritual_week_support'))}\n"
+            f"Отзывы: {_owner_fmt(own.get('reviews'))}\n"
+            f"Сообщения о проблемах: {_owner_fmt(own.get('problems'))}\n"
+            f"Пожертвования: {_owner_fmt(own.get('donations_count'))} шт / {_owner_fmt(own.get('donations_sum'))} ₽\n"
+            f"Ошибки: {_owner_fmt(own.get('errors'))}\n\n"
+            "Выберите раздел:"
+        )
+    except Exception as e:
+        logging.error(f"Кабинет владельца: ошибка раздела 'Сегодня': {e}")
+        return "⚠️ Не удалось построить сводку за сегодня. Ошибка записана в журнал сервера.\n\nВыберите раздел:"
+    finally:
+        with suppress(Exception):
+            own_conn.close()
+        if sibling_conn is not None:
+            with suppress(Exception):
+                sibling_conn.close()
+
+
+def owner_cabinet_users_text() -> str:
+    today_start = datetime.now().strftime("%Y-%m-%dT00:00:00")
+    cutoff7 = (datetime.now() - timedelta(days=7)).isoformat()
+    own_conn = db_connect()
+    sibling_conn = _owner_sibling_conn()
+    try:
+        lines = ["👥 Пользователи", ""]
+        for label, conn, platform in ((OWNER_CABINET_OWN_PLATFORM, own_conn, OWNER_CABINET_OWN_PLATFORM), (OWNER_CABINET_SIBLING_PLATFORM, sibling_conn, OWNER_CABINET_SIBLING_PLATFORM)):
+            if conn is None:
+                lines.append(f"—— {label} ——\nданных пока нет\n")
+                continue
+            total = _owner_scalar(conn, "SELECT COUNT(*) FROM users")
+            new_24h = _owner_scalar(conn, "SELECT COUNT(*) FROM user_funnel_state WHERE platform=? AND first_seen_at>=?", (platform, today_start))
+            new_7d = _owner_scalar(conn, "SELECT COUNT(*) FROM user_funnel_state WHERE platform=? AND first_seen_at>=?", (platform, cutoff7))
+            active_24h = _owner_scalar(conn, "SELECT COUNT(*) FROM user_funnel_state WHERE platform=? AND last_seen_at>=?", (platform, today_start))
+            active_7d = _owner_scalar(conn, "SELECT COUNT(*) FROM user_funnel_state WHERE platform=? AND last_seen_at>=?", (platform, cutoff7))
+            named = _owner_scalar(conn, "SELECT COUNT(*) FROM users WHERE COALESCE(church_name,'')<>''")
+            with_birth = _owner_scalar(conn, "SELECT COUNT(*) FROM users WHERE COALESCE(birth_date,'')<>''")
+            notif_on = _owner_scalar(conn, "SELECT COUNT(*) FROM users WHERE notifications=1")
+            with_loved = _owner_scalar(conn, "SELECT COUNT(DISTINCT user_id) FROM loved_ones")
+            with_favs = _owner_scalar(conn, "SELECT COUNT(DISTINCT user_id) FROM favorites")
+            lines.append(
+                f"—— {label} ——\n"
+                f"Всего: {_owner_fmt(total)}\n"
+                f"Новые 24ч: {_owner_fmt(new_24h)} | 7 дней: {_owner_fmt(new_7d)}\n"
+                f"Активные 24ч: {_owner_fmt(active_24h)} | 7 дней: {_owner_fmt(active_7d)}\n"
+                f"Указали имя: {_owner_fmt(named)}\n"
+                f"Указали дату рождения: {_owner_fmt(with_birth)}\n"
+                f"Включили уведомления: {_owner_fmt(notif_on)}\n"
+                f"Добавили близких: {_owner_fmt(with_loved)}\n"
+                f"Добавили избранное: {_owner_fmt(with_favs)}\n"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        logging.error(f"Кабинет владельца: ошибка раздела 'Пользователи': {e}")
+        return "⚠️ Не удалось построить раздел «Пользователи». Ошибка записана в журнал сервера."
+    finally:
+        with suppress(Exception):
+            own_conn.close()
+        if sibling_conn is not None:
+            with suppress(Exception):
+                sibling_conn.close()
+
+
+def owner_cabinet_channel_text() -> str:
+    cutoff7 = (datetime.now() - timedelta(days=7)).isoformat()
+    date_key = (datetime.utcnow() + timedelta(hours=3)).strftime("%Y-%m-%d")
+    own_conn = db_connect()
+    sibling_conn = _owner_sibling_conn()
+    try:
+        lines = ["📣 Канал", ""]
+        for label, conn in ((OWNER_CABINET_OWN_PLATFORM, own_conn), (OWNER_CABINET_SIBLING_PLATFORM, sibling_conn)):
+            if conn is None:
+                lines.append(f"—— {label} ——\nданных пока нет\n")
+                continue
+            today_count = _owner_scalar(conn, "SELECT COUNT(*) FROM channel_posts WHERE post_date=? AND status='sent'", (date_key,))
+            errors_7d = _owner_scalar(conn, "SELECT COUNT(*) FROM channel_posts WHERE created_at>=? AND status IN ('failed','failed_locked','uncertain_locked')", (cutoff7,))
+            clicks_7d = _owner_scalar(conn, "SELECT COUNT(*) FROM channel_clicks WHERE clicked_at>=?", (cutoff7,))
+            try:
+                recent = conn.execute(
+                    "SELECT slot,rubric,status,created_at FROM channel_posts ORDER BY created_at DESC LIMIT 5",
+                    (),
+                ).fetchall()
+            except Exception:
+                recent = []
+            try:
+                top_cta = conn.execute(
+                    "SELECT target,COUNT(*) FROM channel_clicks WHERE clicked_at>=? GROUP BY target ORDER BY COUNT(*) DESC LIMIT 5",
+                    (cutoff7,),
+                ).fetchall()
+            except Exception:
+                top_cta = []
+            recent_text = "\n".join(f"  • {slot} {rubric}: {status}" for slot, rubric, status, _ in recent) or "  данных пока нет"
+            cta_text = "\n".join(f"  • {target or '—'}: {count}" for target, count in top_cta) or "  данных пока нет"
+            lines.append(
+                f"—— {label} ——\n"
+                f"Публикаций сегодня: {_owner_fmt(today_count)}\n"
+                f"Ошибки публикаций (7д): {_owner_fmt(errors_7d)}\n"
+                f"Клики по кнопкам (7д): {_owner_fmt(clicks_7d)}\n"
+                f"Последние публикации:\n{recent_text}\n"
+                f"Топ CTA (7д):\n{cta_text}\n"
+            )
+        return "\n".join(lines)
+    except Exception as e:
+        logging.error(f"Кабинет владельца: ошибка раздела 'Канал': {e}")
+        return "⚠️ Не удалось построить раздел «Канал». Ошибка записана в журнал сервера."
+    finally:
+        with suppress(Exception):
+            own_conn.close()
+        if sibling_conn is not None:
+            with suppress(Exception):
+                sibling_conn.close()
+
+
+def owner_cabinet_sources_text() -> str:
+    lines = [f"🎯 Источники — {OWNER_CABINET_OWN_PLATFORM} (сквозная воронка, 7 дней)", ""]
+    try:
+        lines.append(funnel_source_report_text(OWNER_CABINET_OWN_PLATFORM, 7))
+    except Exception as e:
+        logging.error(f"Кабинет владельца: ошибка сквозного отчёта: {e}")
+        lines.append("данных пока нет")
+    lines += ["", f"—— {OWNER_CABINET_SIBLING_PLATFORM} (топ источников по кликам, 7 дней) ——"]
+    conn = _owner_sibling_conn()
+    if conn is None:
+        lines.append("данных пока нет")
+    else:
+        try:
+            cutoff7 = (datetime.now() - timedelta(days=7)).isoformat()
+            rows = conn.execute(
+                """SELECT CASE WHEN instr(source,'__')>0 THEN substr(source,1,instr(source,'__')-1) ELSE source END AS src,
+                          COUNT(*), COUNT(DISTINCT user_id)
+                   FROM channel_clicks WHERE clicked_at>=? GROUP BY src ORDER BY COUNT(*) DESC LIMIT 8""",
+                (cutoff7,),
+            ).fetchall()
+            if rows:
+                lines += [f"• {src or 'без метки'}: {count} переходов / {users} чел." for src, count, users in rows]
+            else:
+                lines.append("данных пока нет")
+        except Exception as e:
+            logging.error(f"Кабинет владельца: ошибка источников соседней платформы: {e}")
+            lines.append("данных пока нет")
+        finally:
+            with suppress(Exception):
+                conn.close()
+    return "\n".join(lines)
+
+
+def owner_cabinet_features_text() -> str:
+    cutoff30 = (datetime.now() - timedelta(days=30)).isoformat()
+    own_conn = db_connect()
+    sibling_conn = _owner_sibling_conn()
+    counts = {}
+    try:
+        for conn, platform in ((own_conn, OWNER_CABINET_OWN_PLATFORM), (sibling_conn, OWNER_CABINET_SIBLING_PLATFORM)):
+            if conn is None:
+                continue
+            try:
+                rows = conn.execute(
+                    "SELECT target,COUNT(*) FROM funnel_events WHERE platform=? AND event_name IN ('useful_action','next_step_clicked') AND created_at>=? GROUP BY target",
+                    (platform, cutoff30),
+                ).fetchall()
+                for target, count in rows:
+                    counts[target] = counts.get(target, 0) + int(count or 0)
+            except Exception as e:
+                logging.error(f"Кабинет владельца: ошибка функций {platform}: {e}")
+        loved_users = (_owner_scalar(own_conn, "SELECT COUNT(DISTINCT user_id) FROM loved_ones") or 0)
+        angel_users = (_owner_scalar(own_conn, "SELECT COUNT(*) FROM users WHERE COALESCE(angel_day,'')<>''") or 0)
+        if sibling_conn is not None:
+            loved_users += (_owner_scalar(sibling_conn, "SELECT COUNT(DISTINCT user_id) FROM loved_ones") or 0)
+            angel_users += (_owner_scalar(sibling_conn, "SELECT COUNT(*) FROM users WHERE COALESCE(angel_day,'')<>''") or 0)
+        lines = ["🙏 Функции — использование за 30 дней (обе платформы)", ""]
+        if counts:
+            for target, count in sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:20]:
+                label = OWNER_CABINET_FEATURE_LABELS.get(target, target or "—")
+                lines.append(f"• {label}: {count}")
+        else:
+            lines.append("данных пока нет")
+        lines.append(f"• 🕊️ Мои близкие (добавили хотя бы одну запись): {loved_users}")
+        lines.append(f"• 👼 День ангела указан в профиле: {angel_users}")
+        lines.append("• 📅 Календарь: отдельные клики не фиксируются событием — данных пока нет")
+
+        cutoff7 = (datetime.now() - timedelta(days=7)).isoformat()
+        sw_open_today = 0
+        sw_open_7d = 0
+        sw_started_7d = 0
+        sw_completed_7d = 0
+        sw_support_7d = 0
+        sw_theme_counts = {}
+        today_start = datetime.now().strftime("%Y-%m-%dT00:00:00")
+        for conn, platform in ((own_conn, OWNER_CABINET_OWN_PLATFORM), (sibling_conn, OWNER_CABINET_SIBLING_PLATFORM)):
+            if conn is None:
+                continue
+            sw_open_today += (_owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='spiritual_week_open' AND created_at>=?", (platform, today_start)) or 0)
+            sw_open_7d += (_owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='spiritual_week_open' AND created_at>=?", (platform, cutoff7)) or 0)
+            sw_started_7d += (_owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='spiritual_week_started' AND created_at>=?", (platform, cutoff7)) or 0)
+            sw_completed_7d += (_owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='spiritual_week_completed' AND created_at>=?", (platform, cutoff7)) or 0)
+            sw_support_7d += (_owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='spiritual_week_support_click' AND created_at>=?", (platform, cutoff7)) or 0)
+            try:
+                theme_rows = conn.execute(
+                    "SELECT target,COUNT(*) FROM funnel_events WHERE platform=? AND event_name='spiritual_week_theme_selected' AND created_at>=? GROUP BY target",
+                    (platform, cutoff7),
+                ).fetchall()
+                for theme_key, count in theme_rows:
+                    sw_theme_counts[theme_key] = sw_theme_counts.get(theme_key, 0) + int(count or 0)
+            except Exception as e:
+                logging.error(f"Кабинет владельца: ошибка тем духовной недели {platform}: {e}")
+        lines.append("")
+        lines.append("🕯️ Моя духовная неделя (7 дней, обе платформы)")
+        lines.append(f"• Открыли сегодня: {sw_open_today} | за 7 дней: {sw_open_7d}")
+        lines.append(f"• Начали неделю: {sw_started_7d}")
+        if sw_theme_counts:
+            for theme_key, count in sorted(sw_theme_counts.items(), key=lambda kv: kv[1], reverse=True):
+                lines.append(f"  – {SPIRITUAL_WEEK_THEME_LABELS.get(theme_key, theme_key)}: {count}")
+        lines.append(f"• Дошли до конца недели: {sw_completed_7d}")
+        lines.append(f"• Нажали «Поддержать проект» после недели: {sw_support_7d}")
+
+        ms_open_today = 0
+        ms_open_7d = 0
+        ms_gospel_7d = 0
+        ms_prepare_7d = 0
+        ms_prepared_7d = 0
+        ms_reflect_counts = {}
+        for conn, platform in ((own_conn, OWNER_CABINET_OWN_PLATFORM), (sibling_conn, OWNER_CABINET_SIBLING_PLATFORM)):
+            if conn is None:
+                continue
+            ms_open_today += (_owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='sunday_companion_open' AND created_at>=?", (platform, today_start)) or 0)
+            ms_open_7d += (_owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='sunday_companion_open' AND created_at>=?", (platform, cutoff7)) or 0)
+            ms_gospel_7d += (_owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='sunday_companion_gospel_click' AND created_at>=?", (platform, cutoff7)) or 0)
+            ms_prepare_7d += (_owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='sunday_companion_prepare_open' AND created_at>=?", (platform, cutoff7)) or 0)
+            ms_prepared_7d += (_owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='sunday_companion_prepared' AND created_at>=?", (platform, cutoff7)) or 0)
+            try:
+                reflect_rows = conn.execute(
+                    "SELECT target,COUNT(*) FROM funnel_events WHERE platform=? AND event_name='sunday_companion_reflection_selected' AND created_at>=? GROUP BY target",
+                    (platform, cutoff7),
+                ).fetchall()
+                for opt_key, count in reflect_rows:
+                    ms_reflect_counts[opt_key] = ms_reflect_counts.get(opt_key, 0) + int(count or 0)
+            except Exception as e:
+                logging.error(f"Кабинет владельца: ошибка reflection «Моё воскресенье» {platform}: {e}")
+        lines.append("")
+        lines.append("⛪ Моё воскресенье (7 дней, обе платформы)")
+        lines.append(f"• Открыли сегодня: {ms_open_today} | за 7 дней: {ms_open_7d}")
+        lines.append(f"• «Прочитать Евангелие»: {ms_gospel_7d}")
+        lines.append(f"• Открыли подготовку: {ms_prepare_7d}")
+        lines.append(f"• Отметили «Я подготовился»: {ms_prepared_7d}")
+        if ms_reflect_counts:
+            for opt_key, count in sorted(ms_reflect_counts.items(), key=lambda kv: kv[1], reverse=True):
+                lines.append(f"  – {MY_SUNDAY_REFLECT_LABELS.get(opt_key, opt_key)}: {count}")
+        return "\n".join(lines)
+    except Exception as e:
+        logging.error(f"Кабинет владельца: ошибка раздела 'Функции': {e}")
+        return "⚠️ Не удалось построить раздел «Функции». Ошибка записана в журнал сервера."
+    finally:
+        with suppress(Exception):
+            own_conn.close()
+        if sibling_conn is not None:
+            with suppress(Exception):
+                sibling_conn.close()
+
+
+def owner_cabinet_reviews_text() -> str:
+    own_conn = db_connect()
+    sibling_conn = _owner_sibling_conn()
+    try:
+        lines = ["💬 Отзывы — последние записи", ""]
+        for label, conn in ((OWNER_CABINET_OWN_PLATFORM, own_conn), (OWNER_CABINET_SIBLING_PLATFORM, sibling_conn)):
+            lines.append(f"—— {label} ——")
+            if conn is None:
+                lines.append("данных пока нет\n")
+                continue
+            try:
+                rows = conn.execute(
+                    "SELECT created_at,user_id,first_name,review_text FROM user_reviews ORDER BY id DESC LIMIT 5"
+                ).fetchall()
+            except Exception:
+                rows = []
+            if rows:
+                for created_at, user_id, first_name, review_text in rows:
+                    who = first_name or f"ID {user_id}"
+                    text = (review_text or "").strip().replace("\n", " ")[:180]
+                    lines.append(f"• {(created_at or '')[:16]} | {who}: {text}")
+            else:
+                lines.append("данных пока нет")
+            lines.append("")
+        return "\n".join(lines)
+    except Exception as e:
+        logging.error(f"Кабинет владельца: ошибка раздела 'Отзывы': {e}")
+        return "⚠️ Не удалось построить раздел «Отзывы». Ошибка записана в журнал сервера."
+    finally:
+        with suppress(Exception):
+            own_conn.close()
+        if sibling_conn is not None:
+            with suppress(Exception):
+                sibling_conn.close()
+
+
+def owner_cabinet_donations_text() -> str:
+    today_start = datetime.now().strftime("%Y-%m-%dT00:00:00")
+    cutoff7 = (datetime.now() - timedelta(days=7)).isoformat()
+    cutoff30 = (datetime.now() - timedelta(days=30)).isoformat()
+    own_conn = db_connect()
+    sibling_conn = _owner_sibling_conn()
+    try:
+        lines = ["🕯️ Пожертвования", ""]
+        for label, conn, platform in ((OWNER_CABINET_OWN_PLATFORM, own_conn, OWNER_CABINET_OWN_PLATFORM), (OWNER_CABINET_SIBLING_PLATFORM, sibling_conn, OWNER_CABINET_SIBLING_PLATFORM)):
+            lines.append(f"—— {label} ——")
+            if conn is None:
+                lines.append("данных пока нет\n")
+                continue
+            sum_today = _owner_scalar(conn, "SELECT COALESCE(SUM(amount),0) FROM donation_payments WHERE platform=? AND status='succeeded' AND paid_at>=?", (platform, today_start))
+            sum_7d = _owner_scalar(conn, "SELECT COALESCE(SUM(amount),0) FROM donation_payments WHERE platform=? AND status='succeeded' AND paid_at>=?", (platform, cutoff7))
+            sum_30d = _owner_scalar(conn, "SELECT COALESCE(SUM(amount),0) FROM donation_payments WHERE platform=? AND status='succeeded' AND paid_at>=?", (platform, cutoff30))
+            count_total = _owner_scalar(conn, "SELECT COUNT(*) FROM donation_payments WHERE platform=? AND status='succeeded'", (platform,))
+            try:
+                recent = conn.execute(
+                    "SELECT amount,paid_at FROM donation_payments WHERE platform=? AND status='succeeded' ORDER BY paid_at DESC LIMIT 5",
+                    (platform,),
+                ).fetchall()
+            except Exception:
+                recent = []
+            recent_text = "\n".join(f"  • {amount} ₽ — {(paid or '')[:16]}" for amount, paid in recent) or "  данных пока нет"
+            lines.append(
+                f"Сегодня: {_owner_fmt(sum_today)} ₽\n"
+                f"7 дней: {_owner_fmt(sum_7d)} ₽\n"
+                f"30 дней: {_owner_fmt(sum_30d)} ₽\n"
+                f"Успешных платежей всего: {_owner_fmt(count_total)}\n"
+                f"Последние платежи:\n{recent_text}\n"
+            )
+            broadcast_preview_sent = _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='donation_broadcast_preview_sent'", (platform,))
+            broadcast_sent = _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='donation_broadcast_sent'", (platform,))
+            broadcast_support_clicks = _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='donation_broadcast_support_click'", (platform,))
+            broadcast_later_clicks = _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='donation_broadcast_later_click'", (platform,))
+            lines.append(
+                "Донат-рассылка: "
+                f"preview {_owner_fmt(broadcast_preview_sent)}, "
+                f"отправлено {_owner_fmt(broadcast_sent)}, "
+                f"«Поддержать» {_owner_fmt(broadcast_support_clicks)}, "
+                f"«Позже» {_owner_fmt(broadcast_later_clicks)}\n"
+            )
+            sw_sent = _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='broadcast_spiritual_week_sent' AND source=?", (platform, SPIRITUAL_WEEK_BROADCAST_MARKER))
+            sw_failed = _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='broadcast_spiritual_week_failed' AND source=?", (platform, SPIRITUAL_WEEK_BROADCAST_MARKER))
+            sw_open_clicks = _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='broadcast_spiritual_week_open_click' AND source=?", (platform, SPIRITUAL_WEEK_BROADCAST_MARKER))
+            sw_support_clicks = _owner_scalar(conn, "SELECT COUNT(*) FROM funnel_events WHERE platform=? AND event_name='broadcast_spiritual_week_support_click' AND source=?", (platform, SPIRITUAL_WEEK_BROADCAST_MARKER))
+            sw_broadcast_at = _owner_scalar(conn, "SELECT MIN(created_at) FROM funnel_events WHERE platform=? AND event_name='broadcast_spiritual_week_sent' AND source=?", (platform, SPIRITUAL_WEEK_BROADCAST_MARKER)) or ""
+            sw_started_after = _owner_scalar(conn, "SELECT COUNT(DISTINCT user_id) FROM funnel_events WHERE platform=? AND event_name='spiritual_week_started' AND created_at>=?", (platform, sw_broadcast_at)) if sw_broadcast_at else 0
+            sw_donations_after = _owner_scalar(conn, "SELECT COUNT(*) FROM donation_payments WHERE platform=? AND status='succeeded' AND paid_at>=?", (platform, sw_broadcast_at)) if sw_broadcast_at else 0
+            lines.append(
+                "Рассылка «Моя духовная неделя» (2026-09): "
+                f"выборка {_owner_fmt((sw_sent or 0) + (sw_failed or 0))}, "
+                f"доставлено {_owner_fmt(sw_sent)}, "
+                f"не доставлено {_owner_fmt(sw_failed)}, "
+                f"«Открыть» {_owner_fmt(sw_open_clicks)}, "
+                f"«Поддержать» {_owner_fmt(sw_support_clicks)}, "
+                f"начали неделю после рассылки {_owner_fmt(sw_started_after)}, "
+                f"пожертвований после рассылки {_owner_fmt(sw_donations_after)}\n"
+            )
+            if platform == "MAX" and (count_total or 0) == 0:
+                lines.append("⚠️ Только для владельца: в MAX пока нет ни одного успешного пожертвования (проверьте настройку ЮKassa для MAX).\n")
+        return "\n".join(lines)
+    except Exception as e:
+        logging.error(f"Кабинет владельца: ошибка раздела 'Пожертвования': {e}")
+        return "⚠️ Не удалось построить раздел «Пожертвования». Ошибка записана в журнал сервера."
+    finally:
+        with suppress(Exception):
+            own_conn.close()
+        if sibling_conn is not None:
+            with suppress(Exception):
+                sibling_conn.close()
+
+
+async def _owner_cabinet_max_health() -> str:
+    try:
+        async with httpx.AsyncClient(timeout=3) as client:
+            resp = await client.get(OWNER_CABINET_MAX_HEALTH_URL)
+            return "✅ доступен" if resp.status_code == 200 else f"⚠️ код {resp.status_code}"
+    except Exception:
+        return "❌ недоступен"
+
+
+def _owner_cabinet_heartbeat_age(path: Path) -> str:
+    try:
+        age = datetime.now().timestamp() - path.stat().st_mtime
+        return f"{int(age)} сек назад"
+    except Exception:
+        return "нет файла"
+
+
+async def owner_cabinet_errors_text() -> str:
+    cutoff1 = (datetime.now() - timedelta(days=1)).isoformat()
+    own_conn = db_connect()
+    sibling_conn = _owner_sibling_conn()
+    try:
+        lines = ["⚠️ Ошибки", ""]
+        for label, conn in ((OWNER_CABINET_OWN_PLATFORM, own_conn), (OWNER_CABINET_SIBLING_PLATFORM, sibling_conn)):
+            lines.append(f"—— {label} ——")
+            if conn is None:
+                lines.append("данных пока нет\n")
+                continue
+            errors_24h = _owner_scalar(conn, "SELECT COUNT(*) FROM critical_errors WHERE created_at>=?", (cutoff1,))
+            try:
+                recent = conn.execute("SELECT component,error_text,created_at FROM critical_errors ORDER BY id DESC LIMIT 5").fetchall()
+            except Exception:
+                recent = []
+            recent_text = "\n".join(f"  • {created[:16]} [{component}] {str(text)[:120]}" for component, text, created in recent) or "  данных пока нет"
+            lines.append(f"Критических ошибок (24ч): {_owner_fmt(errors_24h)}\nПоследние:\n{recent_text}\n")
+        lines.append(
+            "—— Статус сервисов ——\n"
+            f"Последняя ошибка публикации MAX: {get_app_setting('max_last_channel_failure', 'нет') or 'нет'}\n"
+            f"Пульс MAX heartbeat: {_owner_cabinet_heartbeat_age(MAX_HEARTBEAT_FILE) if 'MAX_HEARTBEAT_FILE' in globals() else 'нет данных'}\n"
+            f"Пульс TG heartbeat: {_owner_cabinet_heartbeat_age(OWNER_CABINET_SIBLING_HEARTBEAT)}\n"
+            f"MAX /health: {await _owner_cabinet_max_health()}"
+        )
+        return "\n".join(lines)
+    except Exception as e:
+        logging.error(f"Кабинет владельца: ошибка раздела 'Ошибки': {e}")
+        return "⚠️ Не удалось построить раздел «Ошибки». Ошибка записана в журнал сервера."
+    finally:
+        with suppress(Exception):
+            own_conn.close()
+        if sibling_conn is not None:
+            with suppress(Exception):
+                sibling_conn.close()
+
+
+def owner_cabinet_export_text() -> str:
+    own_conn = db_connect()
+    try:
+        last_review_at = None
+        try:
+            row = own_conn.execute("SELECT MAX(created_at) FROM user_reviews").fetchone()
+            last_review_at = row[0] if row else None
+        except Exception:
+            pass
+        sheet_url = f"https://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit" if SPREADSHEET_ID else ""
+        return (
+            "📤 Выгрузка / Google-таблица\n\n"
+            f"Таблица: {sheet_url or 'не настроена'}\n"
+            f"Последний отзыв записан: {last_review_at or 'данных пока нет'}\n"
+            f"Последний бэкап базы: {get_app_setting('last_backup_at', 'данных пока нет') or 'данных пока нет'}\n\n"
+            "Структура книги не меняется из кабинета — только просмотр."
+        )
+    except Exception as e:
+        logging.error(f"Кабинет владельца: ошибка раздела 'Выгрузка': {e}")
+        return "⚠️ Не удалось построить раздел «Выгрузка». Ошибка записана в журнал сервера."
+    finally:
+        with suppress(Exception):
+            own_conn.close()
+
+
+def owner_cabinet_menu_kb():
+    return [
+        [btn("📊 Сегодня", "owner_cab:today"), btn("👥 Пользователи", "owner_cab:users")],
+        [btn("📣 Канал", "owner_cab:channel"), btn("🎯 Источники", "owner_cab:sources")],
+        [btn("🙏 Функции", "owner_cab:features"), btn("💬 Отзывы", "owner_cab:reviews")],
+        [btn("🕯️ Пожертвования", "owner_cab:donations"), btn("⚠️ Ошибки", "owner_cab:errors")],
+        [btn("📤 Выгрузка / Google-таблица", "owner_cab:export")],
+        [btn("🔄 Обновить", "owner_cab:home"), btn("🏠 В обычное меню", "main_menu")],
+    ]
+
+
+def owner_cabinet_section_kb(section: str):
+    return [
+        [btn("🔄 Обновить", f"owner_cab:{section}"), btn("⬅️ Назад в кабинет", "owner_cab:home")],
+        [btn("🏠 В обычное меню", "main_menu")],
+    ]
+
+
+async def owner_cabinet_section_text(section: str) -> str:
+    try:
+        if section in ("home", "today"):
+            return owner_cabinet_today_text()
+        if section == "users":
+            return owner_cabinet_users_text()
+        if section == "channel":
+            return owner_cabinet_channel_text()
+        if section == "sources":
+            return owner_cabinet_sources_text()
+        if section == "features":
+            return owner_cabinet_features_text()
+        if section == "reviews":
+            return owner_cabinet_reviews_text()
+        if section == "donations":
+            return owner_cabinet_donations_text()
+        if section == "errors":
+            return await owner_cabinet_errors_text()
+        if section == "export":
+            return owner_cabinet_export_text()
+        return owner_cabinet_today_text()
+    except Exception as e:
+        logging.error(f"Кабинет владельца: ошибка раздела {section}: {e}")
+        return "⚠️ Не удалось построить раздел. Ошибка записана в журнал сервера."
+
 async def check_donation_payments_loop_max():
     from yookassa import Configuration, Payment as YPayment
     await asyncio.sleep(20)
@@ -4714,7 +6613,7 @@ async def check_donation_payments_loop_max():
                         _mark_donation_field(payment_id, "status", "succeeded"); _mark_donation_field(payment_id, "paid_at", now.isoformat())
                         set_funnel_flag(user_id, "MAX", "donation_made", 1); track_attributed_event(user_id, "MAX", "donation_succeeded", target="donate", value=str(amount))
                     if not user_n:
-                        result = await send_message(chat_id, f"🕯️ Пожертвование {amount} рублей прошло успешно.\n\nБлагодарим за поддержку проекта «С верой». Да хранит вас Господь!", main_menu_buttons())
+                        result = await send_message(chat_id, f"🕯️ Пожертвование {amount} рублей прошло успешно.\n\nБлагодарим за поддержку проекта «С верой». Да хранит вас Господь!", main_menu_buttons(user_id))
                         if _max_response_ok(result): _mark_donation_field(payment_id, "user_notified", 1)
                     if not owner_n:
                         result = await send_message(OWNER_ID, f"💰 Новое пожертвование в «С верой» MAX\n\nСумма: {amount} ₽\nПользователь: {first_name or '—'}\nUsername: @{username if username else '—'}\nID: {user_id}\nPayment ID: {payment_id}")
@@ -4844,6 +6743,7 @@ async def startup():
     spawn_background(nurture_loop_max())
     spawn_background(weekly_funnel_report_loop_max())
     spawn_background(database_backup_loop("vera_max"))
+    spawn_background(spiritual_week_broadcast_once_max())
     logging.info("Vera MAX Bot запущен в текстовом режиме")
 
 
@@ -4868,9 +6768,22 @@ async def _process_webhook_request(request):
             msg = data.get("message", {})
             body = msg.get("body", {})
             sender = msg.get("sender", {})
-            chat_id = msg.get("recipient", {}).get("chat_id") or data.get("chat_id")
+            recipient = msg.get("recipient", {})
+            chat_id = recipient.get("chat_id") or data.get("chat_id")
             user_id = sender.get("user_id", 0)
             first_name = sender.get("name", "")
+
+            # Обычная публикация владельца в самом MAX-канале тоже приходит как
+            # message_created (recipient — канал). Это не диалог с ботом, отвечать
+            # меню на такие события не нужно (см. аналогичную проверку для
+            # message_callback ниже).
+            chat_type = msg.get("chat_type", "") or recipient.get("chat_type", "")
+            if chat_type == "channel" or (chat_id and str(chat_id) == str(MAX_CHANNEL_ID)):
+                logging.info(f"MAX: публикация в канале, пропускаем (chat_id={chat_id})")
+                return JSONResponse({"ok": True})
+
+            if user_id and chat_id:
+                save_user_chat_id(user_id, chat_id)
 
             # Фото
             for att in body.get("attachments", []):
@@ -4944,7 +6857,7 @@ async def _process_webhook_request(request):
                             await send_message(
                                 chat_id,
                                 "☦️ Голосовые работают при вводе вопроса о вере или при отправке отзыва.",
-                                main_menu_buttons()
+                                main_menu_buttons(user_id)
                             )
                             return JSONResponse({"ok": True})
 
@@ -4954,9 +6867,12 @@ async def _process_webhook_request(request):
 
         elif update_type == "bot_started":
             user = data.get("user", {})
-            chat_id = data.get("chat_id") or user.get("user_id")
+            real_chat_id = data.get("chat_id")
             user_id = user.get("user_id", 0)
+            chat_id = real_chat_id or get_user_chat_id(user_id) or user_id
             first_name = user.get("name", "друг")
+            if user_id and real_chat_id:
+                save_user_chat_id(user_id, real_chat_id)
             start_payload = str(
                 data.get("payload")
                 or data.get("start_payload")
@@ -4985,11 +6901,14 @@ async def _process_webhook_request(request):
             payload = cb.get("payload", "")
             # Если callback пришёл из канала — отвечаем в личку пользователю
             chat_type = message.get("chat_type", "")
-            if chat_type == "channel" or (raw_chat_id and str(raw_chat_id).startswith("-")):
-                chat_id = user_id
+            is_channel_redirect = chat_type == "channel" or (raw_chat_id and str(raw_chat_id).startswith("-"))
+            if is_channel_redirect:
+                chat_id = get_user_chat_id(user_id) or user_id
                 logging.info(f"CALLBACK из канала — перенаправляем в личку: user_id={user_id}")
             else:
-                chat_id = raw_chat_id
+                chat_id = raw_chat_id or get_user_chat_id(user_id)
+            if user_id and raw_chat_id and not is_channel_redirect:
+                save_user_chat_id(user_id, raw_chat_id)
             logging.info(f"CALLBACK: chat_id={chat_id} user_id={user_id} payload={payload}")
             if payload and chat_id:
                 await handle_callback(chat_id, user_id, payload, first_name)

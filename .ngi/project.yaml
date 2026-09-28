@@ -1,0 +1,62 @@
+schema_version: 1
+project: Vera
+control_repository: demo23rus/VERA-Bot
+roadmap: VERA_ROADMAP.md
+current_state: docs/VERA_PROJECT_STATUS.md
+rules: .ngi/rules.md
+decisions: .ngi/decisions.md
+workers: .ngi/workers.yaml
+
+source_of_truth:
+  code: github_main
+  repository: demo23rus/VERA-Bot
+  default_branch: main
+  job_base_ref: origin/main
+
+production:
+  dc_device_name: gymgenius
+  canonical_checkout: /root/vera
+  telegram_runtime_path: /root/vera_bot.py
+  max_runtime_path: /root/vera_max_bot.py
+  watchdog_runtime_path: /root/vera_monitoring/vera_watchdog.py
+  landing_webroot: /var/www/sveroy.ru
+  services:
+    - vera-bot.service
+    - vera-max.service
+  watchdog_timer: vera-watchdog.timer
+  health_checks:
+    - http://127.0.0.1:8080/health
+  heartbeat_files:
+    - /tmp/vera_telegram.heartbeat
+    - /tmp/vera_max.heartbeat
+  public_smoke: https://sveroy.ru/
+  direct_production_editing: forbidden
+
+legacy:
+  botflow_project_id: vera
+  botflow_profile: /root/bot_flow_profiles/vera.profile
+  role: secondary_legacy_executor_only
+
+verification:
+  python_compile: "PYTHONPYCACHEPREFIX=/tmp/vera_pycache python3 -m py_compile vera_bot.py vera_max_bot.py vera_monitoring/vera_watchdog.py"
+  router_tests: "PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 python3 -m pytest -q ops/test_ngi_worker_router.py"
+  landing_js_check: "node --check landing/landing-manus.js"
+  full_test_suite_by_default: false
+
+deploy:
+  mechanism: ops/deploy_vera.py
+  merge: fast_forward_only
+  restart_only_changed_service: true
+  watchdog_restart_by_default: false
+  health_required: true
+
+security:
+  never_commit:
+    - secrets
+    - tokens
+    - passwords
+    - .env
+    - databases
+    - user_data
+    - private_user_media
+    - backup_archives

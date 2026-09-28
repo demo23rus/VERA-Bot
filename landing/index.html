@@ -1,0 +1,805 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>С верой — православный помощник рядом каждый день</title>
+  <meta name="description" content="Проект «С верой» — молитвы, церковный календарь, святые, храм рядом и ответы на вопросы о вере."/>
+  <meta name="theme-color" content="#080500"/>
+  <meta property="og:type" content="website"/>
+  <meta property="og:title" content="С верой — православный помощник рядом каждый день"/>
+  <meta property="og:description" content="Молитвы, церковный календарь, святые, храм рядом и спокойные ответы в MAX и Telegram."/>
+  <meta property="og:url" content="https://sveroy.ru/"/>
+  <meta property="og:image" content="https://sveroy.ru/manus_assets/bg_hero.jpg"/>
+  <meta property="og:image:width" content="1600"/>
+  <meta property="og:image:height" content="900"/>
+  <link rel="preload" as="image" href="/manus_assets/bg_hero.webp"/>
+  <link rel="preconnect" href="https://fonts.googleapis.com"/>
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin/>
+  <link href="https://fonts.googleapis.com/css2?family=Cinzel:wght@400;600;700;900&family=Cormorant+Garamond:ital,wght@0,300;0,400;0,500;0,600;1,300;1,400&family=Lora:ital,wght@0,400;0,500;1,400&display=swap" rel="stylesheet"/>
+  <script>
+    window.VERA_LANDING_CONFIG = {
+      maxUrl: "https://max.ru/id232007136009_1_bot",
+      telegramUrl: "https://t.me/Moya_Vera_bot",
+      sourceBase: "ch_start60",
+      analyticsCounterId: 110960947
+    };
+  </script>
+  <!-- Yandex.Metrika counter -->
+  <script type="text/javascript">
+    (function(m,e,t,r,i,k,a){
+      m[i]=m[i]||function(){(m[i].a=m[i].a||[]).push(arguments)};
+      m[i].l=1*new Date();
+      for (var j = 0; j < document.scripts.length; j++) {
+        if (document.scripts[j].src === r) { return; }
+      }
+      k=e.createElement(t),a=e.getElementsByTagName(t)[0],k.async=1,k.src=r,a.parentNode.insertBefore(k,a);
+    })(window, document, "script", "https://mc.yandex.ru/metrika/tag.js", "ym");
+
+    ym(110960947, "init", {
+      clickmap:true,
+      trackLinks:true,
+      accurateTrackBounce:true,
+      webvisor:true
+    });
+  </script>
+  <!-- /Yandex.Metrika counter -->
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+    html { scroll-behavior: smooth; }
+
+    :root {
+      --gold:      #f0c040;
+      --gold-mid:  #d4a017;
+      --gold-dark: #a07810;
+      --gold-pale: #fdf0c0;
+      --cream:     #fefae8;
+      --dark:      #080500;
+      --text-on-dark: #fff;
+      --text-sub:  rgba(255,255,255,0.9);
+    }
+
+    body {
+      font-family: 'Cormorant Garamond', Georgia, serif;
+      background: var(--dark);
+      color: var(--text-on-dark);
+      overflow-x: hidden;
+    }
+
+    /* ─── НАВИГАЦИЯ ─── */
+    nav {
+      position: fixed; top: 0; left: 0; right: 0; z-index: 300;
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 1rem 3rem;
+      background: rgba(8,5,0,0.88);
+      backdrop-filter: blur(14px);
+      border-bottom: 1px solid rgba(240,192,64,0.22);
+    }
+    .nav-logo {
+      font-family: 'Cinzel', serif; font-size: 1.2rem; font-weight: 700;
+      color: var(--gold); text-decoration: none; letter-spacing: 0.1em;
+      display: flex; align-items: center; gap: 0.5rem;
+      text-shadow: 0 0 18px rgba(240,192,64,0.5);
+    }
+    nav ul { list-style: none; display: flex; gap: 2.5rem; }
+    nav ul a {
+      color: rgba(255,255,255,0.75); text-decoration: none;
+      font-family: 'Cinzel', serif; font-size: 0.78rem;
+      letter-spacing: 0.18em; text-transform: uppercase;
+      transition: color 0.25s;
+    }
+    nav ul a:hover { color: var(--gold); }
+
+    /* ─── КНОПКИ ─── */
+    .btn-gold {
+      display: inline-block;
+      background: linear-gradient(135deg, #b8860b 0%, #f0c040 50%, #c8960c 100%);
+      color: #1a0e00; font-family: 'Cinzel', serif; font-weight: 700;
+      font-size: 0.88rem; letter-spacing: 0.12em; text-transform: uppercase;
+      padding: 0.95rem 2.4rem; border-radius: 2px; text-decoration: none;
+      box-shadow: 0 4px 24px rgba(240,192,64,0.5), inset 0 1px 0 rgba(255,255,255,0.25);
+      transition: all 0.3s;
+    }
+    .btn-gold:hover {
+      transform: translateY(-3px);
+      box-shadow: 0 10px 40px rgba(240,192,64,0.75);
+      background: linear-gradient(135deg, #c8960c 0%, #fff0a0 50%, #f0c040 100%);
+    }
+    .btn-outline {
+      display: inline-block;
+      background: rgba(240,192,64,0.08);
+      color: var(--gold); font-family: 'Cinzel', serif; font-weight: 600;
+      font-size: 0.88rem; letter-spacing: 0.12em; text-transform: uppercase;
+      padding: 0.95rem 2.4rem; border: 1.5px solid rgba(240,192,64,0.55);
+      border-radius: 2px; text-decoration: none; transition: all 0.3s;
+    }
+    .btn-outline:hover {
+      background: rgba(240,192,64,0.18); border-color: var(--gold);
+      transform: translateY(-3px); box-shadow: 0 8px 28px rgba(240,192,64,0.3);
+    }
+
+    /* ─── ОБЩИЕ УТИЛИТЫ ─── */
+    .container { max-width: 1120px; margin: 0 auto; padding: 0 2rem; }
+    .text-center { text-align: center; }
+    .eyebrow {
+      font-family: 'Cinzel', serif; font-size: 0.68rem;
+      letter-spacing: 0.32em; text-transform: uppercase;
+      color: var(--gold); display: block; margin-bottom: 0.8rem;
+    }
+    .section-h2 {
+      font-family: 'Cinzel', serif;
+      font-size: clamp(1.8rem, 4vw, 2.9rem);
+      font-weight: 700; line-height: 1.2;
+    }
+    .gold-rule {
+      display: flex; align-items: center; gap: 1rem;
+      margin: 1.4rem auto; max-width: 420px;
+    }
+    .gold-rule::before, .gold-rule::after {
+      content: ''; flex: 1; height: 1px;
+      background: linear-gradient(to right, transparent, var(--gold-mid), transparent);
+    }
+    .gold-rule span { color: var(--gold); font-size: 1.1rem; flex-shrink: 0; }
+
+    /* ─── HERO ─── */
+    .hero {
+      position: relative; min-height: min(100svh, 720px); height: auto;
+      display: flex; align-items: center; justify-content: center;
+      overflow: hidden; padding: 5rem 0 2.5rem;
+      box-sizing: border-box;
+    }
+    .hero-img {
+      position: absolute; inset: 0;
+      background: url('/manus_assets/bg_hero.webp') center 40% / cover no-repeat;
+      animation: zoomBg 20s ease-in-out infinite alternate;
+    }
+    @keyframes zoomBg {
+      from { transform: scale(1.05); }
+      to   { transform: scale(1.0); }
+    }
+    /* Тёмный градиент снизу — чтобы текст читался */
+    .hero-shade {
+      position: absolute; inset: 0;
+      background:
+        linear-gradient(to bottom,
+          rgba(8,5,0,0.50) 0%,
+          rgba(8,5,0,0.20) 30%,
+          rgba(8,5,0,0.65) 65%,
+          rgba(8,5,0,1.00) 100%);
+    }
+    .hero-body {
+      position: relative; z-index: 2;
+      text-align: center; padding: 0 1.5rem; max-width: 860px;
+    }
+    .hero-label {
+      font-family: 'Cinzel', serif; font-size: 0.7rem;
+      letter-spacing: 0.35em; text-transform: uppercase;
+      color: var(--gold); margin-bottom: 1rem;
+      display: flex; align-items: center; justify-content: center; gap: 0.9rem;
+    }
+    .hero-label::before, .hero-label::after {
+      content: ''; width: 55px; height: 1px;
+      background: linear-gradient(to right, transparent, var(--gold-mid));
+    }
+    .hero-label::after { background: linear-gradient(to left, transparent, var(--gold-mid)); }
+    .hero-cross {
+      font-size: 3rem; color: var(--gold); display: block;
+      margin-bottom: 0.5rem;
+      filter: drop-shadow(0 0 25px rgba(240,192,64,0.8));
+      animation: crossPulse 3.5s ease-in-out infinite alternate;
+    }
+    @keyframes crossPulse {
+      from { filter: drop-shadow(0 0 12px rgba(240,192,64,0.5)); }
+      to   { filter: drop-shadow(0 0 55px rgba(240,192,64,1)) drop-shadow(0 0 90px rgba(240,192,64,0.35)); }
+    }
+    .hero h1 {
+      font-family: 'Cinzel', serif;
+      font-size: clamp(2.1rem, 5.5vw, 4rem);
+      font-weight: 900; line-height: 1.15; color: #fff;
+      text-shadow: 0 2px 12px rgba(0,0,0,1), 0 0 40px rgba(0,0,0,0.8);
+      margin-bottom: 0.85rem; letter-spacing: 0.02em;
+    }
+    .hero h1 em { font-style: normal; color: var(--gold); text-shadow: 0 0 30px rgba(240,192,64,0.7); }
+    .hero-desc {
+      font-family: 'Cormorant Garamond', serif; font-style: italic;
+      font-size: clamp(1.1rem, 2vw, 1.35rem); color: rgba(255,255,255,0.95);
+      line-height: 1.42; max-width: 620px; margin: 0 auto 1rem;
+      text-shadow: 0 1px 8px rgba(0,0,0,0.9);
+    }
+    .hero-btns { display: flex; gap: 0.85rem; justify-content: center; flex-wrap: wrap; margin-bottom: 0.6rem; }
+    .hero-note { font-size: 0.8rem; color: rgba(240,192,64,0.55); letter-spacing: 0.08em; }
+    .channel-box {
+      max-width: 660px;
+      margin: 0.75rem auto 0;
+      padding: 0.75rem 0.95rem 0.85rem;
+      background: rgba(8,5,0,0.58);
+      border: 1px solid rgba(240,192,64,0.32);
+      border-radius: 6px;
+      box-shadow: 0 12px 34px rgba(0,0,0,0.32);
+    }
+    .channel-title {
+      font-family: 'Cinzel', serif;
+      color: var(--gold);
+      font-size: 0.9rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      margin-bottom: 0.25rem;
+    }
+    .channel-text {
+      color: rgba(255,255,255,0.88);
+      font-size: 0.95rem;
+      line-height: 1.35;
+      margin: 0 auto 0.55rem;
+      max-width: 560px;
+    }
+    .channel-btns {
+      display: flex;
+      justify-content: center;
+      gap: 0.55rem;
+      flex-wrap: wrap;
+    }
+    .btn-channel {
+      display: inline-block;
+      min-width: 210px;
+      padding: 0.58rem 0.9rem;
+      border-radius: 3px;
+      border: 1px solid rgba(240,192,64,0.46);
+      background: rgba(240,192,64,0.12);
+      color: var(--gold-pale);
+      font-family: 'Cinzel', serif;
+      font-size: 0.72rem;
+      font-weight: 700;
+      letter-spacing: 0.08em;
+      text-transform: uppercase;
+      text-decoration: none;
+      transition: background 0.25s, border-color 0.25s, transform 0.25s;
+    }
+    .btn-channel:hover {
+      background: rgba(240,192,64,0.2);
+      border-color: var(--gold);
+      transform: translateY(-2px);
+    }
+    .hero-arrow {
+      position: absolute; bottom: 0.75rem; left: 50%;
+      transform: translateX(-50%); z-index: 2;
+      color: rgba(240,192,64,0.55); font-size: 1.3rem;
+      animation: arrowBounce 2.2s ease-in-out infinite; cursor: pointer;
+    }
+    @keyframes arrowBounce {
+      0%,100% { transform: translateX(-50%) translateY(0); opacity: 0.5; }
+      50%      { transform: translateX(-50%) translateY(9px); opacity: 1; }
+    }
+
+    /* ─── РАЗДЕЛЫ (карточки) ─── */
+    .features-section {
+      padding: 3rem 0;
+      background: linear-gradient(180deg, #080500 0%, #110c00 100%);
+    }
+    .features-section .section-h2 { color: var(--gold); }
+    .features-intro {
+      font-size: 1.05rem; color: rgba(255,255,255,0.78);
+      max-width: 580px; margin: 0.6rem auto 1.5rem; line-height: 1.45;
+    }
+    .cards-wrap {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 0.8rem;
+      max-width: 980px;
+      margin: 1.5rem auto 0;
+      padding: 0 2rem;
+    }
+    @media(max-width: 680px) { .cards-wrap { grid-template-columns: 1fr; padding: 0 1rem; } }
+    .card {
+      position: relative;
+      min-height: 108px;
+      padding: 1.05rem 1.15rem;
+      display: grid;
+      grid-template-columns: 42px 1fr;
+      gap: 0.9rem;
+      align-items: flex-start;
+      overflow: hidden;
+      cursor: default;
+      background: rgba(240,192,64,0.06);
+      border: 1px solid rgba(240,192,64,0.2);
+      border-radius: 6px;
+      transition: background 0.25s, border-color 0.25s, transform 0.25s;
+    }
+    .card:hover {
+      background: rgba(240,192,64,0.11);
+      border-color: rgba(240,192,64,0.42);
+      transform: translateY(-2px);
+    }
+    .card-body {
+      position: static;
+      padding: 0;
+    }
+    .card-icon {
+      width: 42px; height: 42px; display: flex; align-items: center; justify-content: center;
+      border: 1px solid rgba(240,192,64,0.26);
+      border-radius: 50%;
+      background: rgba(8,5,0,0.34);
+      color: var(--gold);
+      font-size: 1.35rem;
+      line-height: 1;
+    }
+    .card-title {
+      font-family: 'Cinzel', serif; font-size: 1rem; font-weight: 700;
+      color: var(--gold); margin-bottom: 0.35rem; letter-spacing: 0.04em;
+    }
+    .card-desc {
+      font-size: 0.95rem; color: rgba(255,255,255,0.84); line-height: 1.35;
+    }
+
+    /* ─── МОМЕНТЫ ─── */
+    .moments-section {
+      position: relative; padding: 3.5rem 0; overflow: hidden;
+    }
+    .moments-photo {
+      position: absolute; inset: 0;
+      background: url('/manus_assets/bg_candles.webp') center / cover no-repeat;
+    }
+    /* Тёмный слой слева — где текст */
+    .moments-shade {
+      position: absolute; inset: 0;
+      background: linear-gradient(to right,
+        rgba(8,5,0,0.95) 0%,
+        rgba(8,5,0,0.88) 45%,
+        rgba(8,5,0,0.55) 70%,
+        rgba(8,5,0,0.3) 100%);
+    }
+    .moments-body { position: relative; z-index: 2; }
+    .moments-section .section-h2 { color: var(--gold); }
+    .moments-list { display: flex; flex-direction: column; gap: 0.7rem; margin-top: 1.8rem; max-width: 640px; }
+    .moment-item {
+      display: flex; align-items: center; gap: 1.1rem;
+      padding: 0.85rem 1.25rem;
+      background: rgba(240,192,64,0.07);
+      border-left: 3px solid var(--gold-mid);
+      border-radius: 0 4px 4px 0;
+      transition: all 0.3s;
+    }
+    .moment-item:hover {
+      background: rgba(240,192,64,0.14);
+      border-left-color: var(--gold);
+      transform: translateX(5px);
+    }
+    .moment-item .cross { color: var(--gold); font-size: 1rem; flex-shrink: 0; }
+    .moment-item p {
+      font-family: 'Cormorant Garamond', serif; font-size: 1.15rem;
+      color: #fff; line-height: 1.6;
+      text-shadow: 0 1px 4px rgba(0,0,0,0.6);
+    }
+
+    /* ─── ДЛЯ КОГО ─── */
+    .audience-section {
+      position: relative; padding: 3.5rem 0; overflow: hidden;
+      background: linear-gradient(135deg, #0b0700 0%, #171000 52%, #090600 100%);
+    }
+    .audience-shade {
+      position: absolute; inset: 0;
+      background: linear-gradient(to left, rgba(240,192,64,0.08), transparent 48%);
+    }
+    .audience-body { position: relative; z-index: 2; }
+    .audience-section .section-h2 { color: var(--gold); }
+    .audience-layout {
+      display: grid; grid-template-columns: 1fr 1fr;
+      gap: 2.5rem; align-items: center; margin-top: 1.5rem;
+    }
+    @media(max-width: 768px) { .audience-layout { grid-template-columns: 1fr; gap: 2rem; } }
+    .audience-left .section-h2 { text-align: left; }
+    .audience-left .eyebrow { text-align: left; }
+    .audience-left .gold-rule { margin-left: 0; }
+    .audience-cards { display: flex; flex-direction: column; gap: 0.9rem; }
+    .aud-card {
+      background: rgba(240,192,64,0.06);
+      border: 1px solid rgba(240,192,64,0.18);
+      border-radius: 4px; padding: 0.95rem 1.2rem;
+      display: flex; align-items: flex-start; gap: 0.9rem;
+      transition: all 0.3s;
+    }
+    .aud-card:hover {
+      background: rgba(240,192,64,0.12);
+      border-color: rgba(240,192,64,0.45);
+      transform: translateX(4px);
+    }
+    .aud-dot {
+      width: 8px; height: 8px; background: var(--gold); border-radius: 50%;
+      flex-shrink: 0; margin-top: 0.45rem;
+      box-shadow: 0 0 8px rgba(240,192,64,0.7);
+    }
+    .aud-card p { font-size: 1rem; color: #fff; line-height: 1.65; }
+
+    /* ─── ШАГИ ─── */
+    .steps-section {
+      position: relative; padding: 3.5rem 0; overflow: hidden;
+    }
+    .steps-photo {
+      position: absolute; inset: 0;
+      background: url('/manus_assets/bg_domes.webp') center 60% / cover no-repeat;
+    }
+    .steps-shade {
+      position: absolute; inset: 0;
+      background: linear-gradient(180deg,
+        rgba(8,5,0,0.92) 0%,
+        rgba(8,5,0,0.78) 50%,
+        rgba(8,5,0,0.92) 100%);
+    }
+    .steps-body { position: relative; z-index: 2; }
+    .steps-section .section-h2 { color: var(--gold); }
+    .steps-grid {
+      display: grid; grid-template-columns: repeat(3,1fr);
+      gap: 1.4rem; margin-top: 1.9rem; position: relative;
+    }
+    @media(max-width: 680px) { .steps-grid { grid-template-columns: 1fr; } }
+    .steps-line {
+      position: absolute; top: 3.8rem; left: 18%; right: 18%; height: 1px;
+      background: linear-gradient(90deg, transparent, var(--gold-mid), var(--gold), var(--gold-mid), transparent);
+      opacity: 0.45;
+    }
+    @media(max-width: 680px) { .steps-line { display: none; } }
+    .step { text-align: center; }
+    .step-num {
+      width: 62px; height: 62px; border-radius: 50%;
+      background: linear-gradient(135deg, #8b6914, #d4a017, #f0c040);
+      display: flex; align-items: center; justify-content: center;
+      font-family: 'Cinzel', serif; font-size: 1.7rem; font-weight: 900;
+      color: #0a0600; margin: 0 auto 1rem;
+      box-shadow: 0 0 28px rgba(240,192,64,0.55), 0 0 60px rgba(240,192,64,0.2);
+      position: relative; z-index: 1;
+    }
+    .step h3 {
+      font-family: 'Cinzel', serif; font-size: 1rem; font-weight: 700;
+      color: var(--gold); margin-bottom: 0.6rem; letter-spacing: 0.04em;
+    }
+    .step p { font-size: 0.95rem; color: rgba(255,255,255,0.85); line-height: 1.7; }
+
+    /* ─── О ПРОЕКТЕ (светлая) ─── */
+    .about-section {
+      background: linear-gradient(135deg, #fdf8e4 0%, #fef5cc 50%, #fdf0b8 100%);
+      padding: 3rem 0; position: relative;
+    }
+    .about-section::before, .about-section::after {
+      content: ''; position: absolute; left: 0; right: 0; height: 5px;
+      background: linear-gradient(90deg, transparent, var(--gold-mid), var(--gold), var(--gold-mid), transparent);
+    }
+    .about-section::before { top: 0; }
+    .about-section::after  { bottom: 0; }
+    .about-section .eyebrow { color: var(--gold-dark); }
+    .about-section .section-h2 { color: #2a1600; }
+    .about-section .gold-rule::before,
+    .about-section .gold-rule::after { background: linear-gradient(to right, transparent, var(--gold-dark), transparent); }
+    .about-text {
+      font-size: 1.1rem; color: #4a2e00; line-height: 1.7;
+      max-width: 720px; margin: 1.2rem auto 0;
+    }
+    .about-icons {
+      display: flex; justify-content: center; gap: 3rem;
+      margin-top: 1.8rem; flex-wrap: wrap;
+    }
+    .about-icon { display: flex; flex-direction: column; align-items: center; gap: 0.4rem; }
+    .about-icon .ico { font-size: 2.2rem; }
+    .about-icon span {
+      font-family: 'Cinzel', serif; font-size: 0.65rem;
+      letter-spacing: 0.18em; text-transform: uppercase; color: var(--gold-dark);
+    }
+
+    /* ─── CTA ─── */
+    .cta-section {
+      position: relative; padding: 3.8rem 0; overflow: hidden; text-align: center;
+      background: linear-gradient(180deg, #100a00 0%, #080500 100%);
+    }
+    .cta-shade {
+      position: absolute; inset: 0;
+      background: linear-gradient(180deg,
+        rgba(240,192,64,0.10) 0%,
+        rgba(8,5,0,0.08) 45%,
+        rgba(240,192,64,0.08) 100%);
+    }
+    .cta-body { position: relative; z-index: 2; }
+    .cta-section .section-h2 {
+      color: var(--gold);
+      font-size: clamp(2rem, 5vw, 3.5rem);
+      text-shadow: 0 2px 20px rgba(0,0,0,0.9);
+    }
+    .cta-sub {
+      font-family: 'Cormorant Garamond', serif; font-style: italic;
+      font-size: 1.3rem; color: rgba(255,255,255,0.92);
+      margin: 0.8rem 0 1.7rem;
+      text-shadow: 0 1px 8px rgba(0,0,0,0.8);
+    }
+    .cta-btns { display: flex; gap: 1.2rem; justify-content: center; flex-wrap: wrap; }
+    .cta-note { margin-top: 1.4rem; font-size: 0.8rem; color: rgba(240,192,64,0.5); letter-spacing: 0.08em; }
+
+    /* ─── ФУТЕР ─── */
+    footer {
+      background: #050300;
+      border-top: 1px solid rgba(240,192,64,0.14);
+      padding: 2.5rem 2rem; text-align: center;
+    }
+    .footer-cross {
+      font-size: 2rem; color: var(--gold-mid); display: block;
+      margin-bottom: 0.8rem; opacity: 0.55;
+      text-shadow: 0 0 18px rgba(240,192,64,0.4);
+    }
+    footer p {
+      font-family: 'Cinzel', serif; font-size: 0.72rem;
+      letter-spacing: 0.15em; color: rgba(240,192,64,0.32); text-transform: uppercase;
+    }
+    footer p + p { margin-top: 0.35rem; }
+
+    @media(max-width: 768px) {
+	      nav { padding: 0.75rem 1rem; }
+	      nav ul { gap: 0.9rem; }
+	      nav ul a { font-size: 0.66rem; letter-spacing: 0.1em; }
+	      .nav-logo { font-size: 1rem; }
+	      .hero { min-height: 0; height: auto; padding: 4.4rem 0 1.5rem; }
+	      .hero-body { padding: 0 1rem; }
+	      .hero-label { margin-bottom: 0.8rem; letter-spacing: 0.22em; }
+	      .hero-cross { font-size: 2.35rem; margin-bottom: 0.35rem; }
+	      .hero h1 { font-size: clamp(1.85rem, 9vw, 2.7rem); }
+	      .hero-desc { font-size: 1rem; line-height: 1.36; margin-bottom: 0.85rem; }
+	      .hero-btns, .cta-btns { gap: 0.8rem; }
+	      .btn-gold, .btn-outline { width: min(100%, 320px); padding: 0.86rem 1rem; font-size: 0.78rem; }
+	      .channel-box { margin-top: 0.65rem; padding: 0.7rem; }
+	      .channel-title { font-size: 0.78rem; }
+	      .channel-text { font-size: 0.88rem; line-height: 1.28; margin-bottom: 0.5rem; }
+	      .btn-channel { width: min(100%, 320px); min-width: 0; padding: 0.58rem 0.8rem; font-size: 0.68rem; }
+	      .hero-arrow { display: none; }
+	      .features-section, .moments-section, .audience-section, .steps-section, .about-section, .cta-section { padding: 2.4rem 0; }
+	      .card { min-height: 0; }
+	    }
+  </style>
+</head>
+<body>
+<noscript><div><img src="https://mc.yandex.ru/watch/110960947" style="position:absolute; left:-9999px;" alt=""/></div></noscript>
+
+<!-- НАВИГАЦИЯ -->
+<nav id="top">
+  <a href="#top" class="nav-logo">☦ С ВЕРОЙ</a>
+  <ul>
+    <li><a href="#features">Разделы</a></li>
+    <li><a href="#steps">Как начать</a></li>
+    <li><a href="#cta">Открыть</a></li>
+  </ul>
+</nav>
+
+<!-- HERO -->
+<section class="hero">
+  <div class="hero-img"></div>
+  <div class="hero-shade"></div>
+  <div class="hero-body">
+    <div class="hero-label">Православный помощник</div>
+    <span class="hero-cross">☦</span>
+    <h1>Когда хочется <em>тишины,</em><br>молитвы и понятного ориентира</h1>
+    <p class="hero-desc">
+      Проект «С верой» помогает открыть молитву, посмотреть церковный день,
+      вспомнить о близких и спокойно разобраться с вопросом о вере.
+    </p>
+    <div class="hero-btns">
+      <a href="https://max.ru/id232007136009_1_bot?start=ch_start60__lp_yd_max" class="btn-gold js-cta" data-platform="max">☦ Открыть в MAX</a>
+      <a href="https://t.me/Moya_Vera_bot?start=ch_start60__lp_yd_tg" class="btn-outline js-cta" data-platform="telegram">☦ Открыть в Telegram</a>
+    </div>
+    <p class="hero-note">Откроется удобный диалог. Без регистрации и лишних шагов.</p>
+    <div class="channel-box" aria-label="Каналы проекта С верой">
+      <div class="channel-title">Подписывайтесь на наши каналы</div>
+      <p class="channel-text">
+        Там публикуем молитвы, церковный календарь, мысли на день и полезные материалы проекта “С верой”.
+      </p>
+      <div class="channel-btns">
+        <a href="https://max.ru/channel_s_veroy" class="btn-channel js-channel" data-channel="max">Подписаться на канал в MAX</a>
+        <a href="https://t.me/SvyatoyPut" class="btn-channel js-channel" data-channel="telegram">Подписаться на канал в Telegram</a>
+      </div>
+    </div>
+  </div>
+  <div class="hero-arrow" onclick="document.getElementById('features').scrollIntoView({behavior:'smooth'})">↓</div>
+</section>
+
+<!-- РАЗДЕЛЫ -->
+<section class="features-section" id="features">
+  <div class="container text-center">
+    <span class="eyebrow">Чем полезен</span>
+    <h2 class="section-h2">Разделы проекта</h2>
+    <div class="gold-rule"><span>☦</span></div>
+    <p class="features-intro">
+      Всё, что нужно для духовной жизни — молитвы, календарь, святые,
+      поиск храма и ответы на вопросы о вере — в одном удобном помощнике.
+    </p>
+  </div>
+  <div class="cards-wrap">
+    <div class="card">
+      <span class="card-icon">🙏</span>
+      <div class="card-body">
+        <div class="card-title">Молитвы</div>
+        <div class="card-desc">Утренние, вечерние и молитвы на разные случаи.</div>
+      </div>
+    </div>
+    <div class="card">
+      <span class="card-icon">📅</span>
+      <div class="card-body">
+        <div class="card-title">Церковный календарь</div>
+        <div class="card-desc">Праздники, посты и важные дни.</div>
+      </div>
+    </div>
+    <div class="card">
+      <span class="card-icon">☦</span>
+      <div class="card-body">
+        <div class="card-title">День ангела</div>
+        <div class="card-desc">Память святого по имени и дате.</div>
+      </div>
+    </div>
+    <div class="card">
+      <span class="card-icon">🕊️</span>
+      <div class="card-body">
+        <div class="card-title">Мои близкие</div>
+        <div class="card-desc">Список родных для молитвы и памяти.</div>
+      </div>
+    </div>
+    <div class="card">
+      <span class="card-icon">?</span>
+      <div class="card-body">
+        <div class="card-title">Задать вопрос</div>
+        <div class="card-desc">Спокойный ответ по теме веры и церковной жизни.</div>
+      </div>
+    </div>
+    <div class="card">
+      <span class="card-icon">⌖</span>
+      <div class="card-body">
+        <div class="card-title">Найти храм рядом</div>
+        <div class="card-desc">Помощь с поиском ближайшего храма.</div>
+      </div>
+    </div>
+    <div class="card">
+      <span class="card-icon">✦</span>
+      <div class="card-body">
+        <div class="card-title">Святые</div>
+        <div class="card-desc">Краткие сведения и дни памяти.</div>
+      </div>
+    </div>
+    <div class="card">
+      <span class="card-icon">📚</span>
+      <div class="card-body">
+        <div class="card-title">Библиотека</div>
+        <div class="card-desc">Полезные тексты и материалы.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- МОМЕНТЫ -->
+<section class="moments-section" id="moments">
+  <div class="moments-photo"></div>
+  <div class="moments-shade"></div>
+  <div class="moments-body container">
+    <span class="eyebrow">Когда особенно нужен</span>
+    <h2 class="section-h2">В обычные моменты жизни</h2>
+    <div class="gold-rule" style="margin-left:0;max-width:280px;"><span>☦</span></div>
+    <div class="moments-list">
+      <div class="moment-item">
+        <span class="cross">☦</span>
+        <p>Когда тревожно и хочется начать с короткой молитвы.</p>
+      </div>
+      <div class="moment-item">
+        <span class="cross">☦</span>
+        <p>Когда нужно быстро посмотреть церковный день или пост.</p>
+      </div>
+      <div class="moment-item">
+        <span class="cross">☦</span>
+        <p>Когда важно вспомнить о близких и помолиться о них.</p>
+      </div>
+      <div class="moment-item">
+        <span class="cross">☦</span>
+        <p>Когда вопрос о вере хочется задать спокойно и простыми словами.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ДЛЯ КОГО -->
+<section class="audience-section" id="audience">
+  <div class="audience-shade"></div>
+  <div class="audience-body container">
+    <div class="audience-layout">
+      <div class="audience-left">
+        <span class="eyebrow">Для кого</span>
+        <h2 class="section-h2">Для тех,<br>кто идёт своим темпом</h2>
+        <div class="gold-rule" style="margin-left:0;max-width:280px;"><span>☦</span></div>
+      </div>
+      <div class="audience-cards">
+        <div class="aud-card">
+          <div class="aud-dot"></div>
+          <p>Для тех, кто давно в церковной жизни и хочет иметь нужные разделы под рукой.</p>
+        </div>
+        <div class="aud-card">
+          <div class="aud-dot"></div>
+          <p>Для тех, кто только начинает и не хочет теряться в сложных словах.</p>
+        </div>
+        <div class="aud-card">
+          <div class="aud-dot"></div>
+          <p>Для тех, кому нужен бережный православный ориентир на каждый день.</p>
+        </div>
+        <div class="aud-card">
+          <div class="aud-dot"></div>
+          <p>Для тех, кто хочет молиться о близких и помнить важные церковные даты.</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ШАГИ -->
+<section class="steps-section" id="steps">
+  <div class="steps-photo"></div>
+  <div class="steps-shade"></div>
+  <div class="steps-body container text-center">
+    <span class="eyebrow">Как начать</span>
+    <h2 class="section-h2">Три простых шага</h2>
+    <div class="gold-rule"><span>☦</span></div>
+    <div class="steps-grid">
+      <div class="steps-line"></div>
+      <div class="step">
+        <div class="step-num">1</div>
+        <h3>Откройте помощника</h3>
+        <p>Выберите удобное приложение — MAX или Telegram.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h3>Найдите нужный раздел</h3>
+        <p>Молитвы, календарь, святые, храм рядом или вопрос о вере.</p>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h3>Пользуйтесь в своё время</h3>
+        <p>Без давления и спешки — когда действительно нужно.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- О ПРОЕКТЕ -->
+<section class="about-section" id="about">
+  <div class="container text-center">
+    <span class="eyebrow">О проекте</span>
+    <h2 class="section-h2">Бережный тон, понятные разделы,<br>без информационного шума</h2>
+    <div class="gold-rule"><span>☦</span></div>
+    <p class="about-text">
+      «С верой» не заменяет живую церковную жизнь и разговор со священником.
+      Он помогает сделать ближайший спокойный шаг: открыть молитву,
+      вспомнить важное, найти ориентир — когда это нужно именно вам.
+    </p>
+    <div class="about-icons">
+      <div class="about-icon"><span class="ico">🙏</span><span>Молитвы</span></div>
+      <div class="about-icon"><span class="ico">☦</span><span>Вера</span></div>
+      <div class="about-icon"><span class="ico">📅</span><span>Календарь</span></div>
+      <div class="about-icon"><span class="ico">🕊️</span><span>Близкие</span></div>
+      <div class="about-icon"><span class="ico">📚</span><span>Библиотека</span></div>
+    </div>
+  </div>
+</section>
+
+<!-- CTA -->
+<section class="cta-section" id="cta">
+  <div class="cta-shade"></div>
+  <div class="cta-body container">
+    <span class="hero-cross" style="font-size:2.8rem;display:block;margin-bottom:0.8rem;color:var(--gold);filter:drop-shadow(0 0 20px rgba(240,192,64,0.7));">☦</span>
+    <span class="eyebrow">Начните сейчас</span>
+    <h2 class="section-h2">Пусть помощник будет рядом<br>в удобном приложении</h2>
+    <p class="cta-sub">Молитва, календарь и спокойный ответ — всегда под рукой.</p>
+    <div class="cta-btns">
+      <a href="https://max.ru/id232007136009_1_bot?start=ch_start60__lp_yd_max" class="btn-gold js-cta" data-platform="max">☦ Открыть в MAX</a>
+      <a href="https://t.me/Moya_Vera_bot?start=ch_start60__lp_yd_tg" class="btn-outline js-cta" data-platform="telegram">☦ Открыть в Telegram</a>
+    </div>
+    <p class="cta-note">Откроется удобный диалог. Без регистрации и лишних шагов.</p>
+  </div>
+</section>
+
+<!-- ФУТЕР -->
+<footer>
+  <span class="footer-cross">☦</span>
+  <p>© Проект «С верой»</p>
+  <p>Православный помощник на каждый день</p>
+</footer>
+
+<script src="/landing-manus.js" defer></script>
+</body>
+</html>
