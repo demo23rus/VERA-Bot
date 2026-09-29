@@ -4697,6 +4697,34 @@ async def get_daily_gospel_max() -> str:
 
 
 # ========== МОЛИТВА ДНЯ И РАССЫЛКА ==========
+def clean_daily_prayer_text(text: str) -> str:
+    """Remove generated/cache markup while preserving the prayer body."""
+    text = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = re.sub(r"^\s*```(?:[\w-]+)?\s*\n?", "", text)
+    text = re.sub(r"\n?\s*```\s*$", "", text)
+    text = text.replace("`", "")
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", text)
+    text = text.replace("**", "").replace("__", "")
+    wrapping_quotes = (("«", "»"), ('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’"))
+    for opening, closing in wrapping_quotes:
+        if text.startswith(opening) and text.endswith(closing) and len(text) >= 2:
+            text = text[1:-1].strip()
+            break
+    lines = text.split("\n")
+    first_content = next((index for index, line in enumerate(lines) if line.strip()), None)
+    if first_content is not None:
+        first_line = lines[first_content].strip()
+        if (
+            first_line.startswith("Молитва ")
+            or first_line.startswith("Молитва дня")
+            or first_line.startswith("Личное молитвенное обращение")
+        ):
+            lines = lines[first_content + 1:]
+            while lines and not lines[0].strip():
+                lines.pop(0)
+    return "\n".join(lines).strip()
+
+
 async def get_prayer_of_day_max() -> str:
     today = datetime.now().strftime("%Y-%m-%d")
     conn = db_connect()
@@ -4705,7 +4733,7 @@ async def get_prayer_of_day_max() -> str:
     row = c.fetchone()
     conn.close()
     if row:
-        return row[0]
+        return clean_daily_prayer_text(row[0])
     day_str = date_ru("short")
     feast = get_todays_feast()
     context = f"Сегодня фиксированный праздник: {feast}." if feast else ""
@@ -4713,8 +4741,9 @@ async def get_prayer_of_day_max() -> str:
         f"Напиши православную молитву дня. {context} "
         f"Дата: {day_str}. "
         "Молитва должна быть тёплой, душевной, 8-15 строк. "
-        "Начни с обращения к Господу или Богородице. Заверши Аминь. "
-        "Пиши только по-русски."
+        "Пиши только обычной русской прозой. Начни сразу с обращения к Господу или Богородице. "
+        "Заверши Аминь. Не используй Markdown, заголовки, выделение, кодовые блоки, обратные кавычки, "
+        "декоративные кавычки или отдельную строку с названием молитвы."
     )
     try:
         msg = await asyncio.to_thread(
@@ -4724,7 +4753,7 @@ async def get_prayer_of_day_max() -> str:
             system="Ты православный справочный помощник. Пишешь только пример личного молитвенного обращения своими словами, не официальный церковный текст, не представляясь священником.",
             messages=[{"role": "user", "content": prompt}]
         )
-        prayer = msg.content[0].text
+        prayer = clean_daily_prayer_text(msg.content[0].text)
         conn2 = db_connect()
         conn2.execute("INSERT OR REPLACE INTO daily_prayer_cache (date, prayer) VALUES (?,?)", (today, prayer))
         conn2.commit()
@@ -4732,7 +4761,7 @@ async def get_prayer_of_day_max() -> str:
         return prayer
     except Exception as e:
         logging.error(f"Ошибка молитвы дня MAX: {e}")
-        return PRAYER_TEXTS["prayer_morning_ru"][1]
+        return clean_daily_prayer_text(PRAYER_TEXTS["prayer_morning_ru"][1])
 
 async def morning_broadcast_max():
     """Утренняя рассылка всем пользователям MAX у кого включены уведомления"""
@@ -4745,7 +4774,7 @@ async def morning_broadcast_max():
     day_str = date_ru("short")
     feast = get_todays_feast()
     feast_line = ("🎉 " + feast + "\n\n") if feast else ""
-    text = "🌅 Доброе утро, " + day_str + "!\n\n" + feast_line + "☦️ Молитва дня\n\n" + prayer + "\n\n─────────────────\n☦️ Православный помощник → @id232007136009_1_bot"
+    text = "🌅 Доброе утро, " + day_str + "!\n\n" + feast_line + "☦️ Молитва дня\n\n" + clean_daily_prayer_text(prayer)
     sent = 0
     failed = 0
     skipped_no_chat_id = 0

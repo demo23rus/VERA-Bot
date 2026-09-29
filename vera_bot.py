@@ -5306,6 +5306,34 @@ async def channel_watchdog_loop():
 
 
 # ========== НАПОМИНАНИЯ О ДНЕ АНГЕЛА ==========
+def clean_daily_prayer_text(text: str) -> str:
+    """Remove generated/cache markup while preserving the prayer body."""
+    text = str(text or "").replace("\r\n", "\n").replace("\r", "\n").strip()
+    text = re.sub(r"^\s*```(?:[\w-]+)?\s*\n?", "", text)
+    text = re.sub(r"\n?\s*```\s*$", "", text)
+    text = text.replace("`", "")
+    text = re.sub(r"(?m)^\s{0,3}#{1,6}\s*", "", text)
+    text = text.replace("**", "").replace("__", "")
+    wrapping_quotes = (("«", "»"), ('"', '"'), ("'", "'"), ("“", "”"), ("‘", "’"))
+    for opening, closing in wrapping_quotes:
+        if text.startswith(opening) and text.endswith(closing) and len(text) >= 2:
+            text = text[1:-1].strip()
+            break
+    lines = text.split("\n")
+    first_content = next((index for index, line in enumerate(lines) if line.strip()), None)
+    if first_content is not None:
+        first_line = lines[first_content].strip()
+        if (
+            first_line.startswith("Молитва ")
+            or first_line.startswith("Молитва дня")
+            or first_line.startswith("Личное молитвенное обращение")
+        ):
+            lines = lines[first_content + 1:]
+            while lines and not lines[0].strip():
+                lines.pop(0)
+    return "\n".join(lines).strip()
+
+
 async def get_prayer_of_day() -> str:
     """Генерирует или возвращает из кеша молитву дня"""
     today = datetime.now().strftime("%Y-%m-%d")
@@ -5316,7 +5344,7 @@ async def get_prayer_of_day() -> str:
     row = c.fetchone()
     conn.close()
     if row:
-        return row[0]
+        return clean_daily_prayer_text(row[0])
     # Генерируем новую
     day_str = date_ru("short")
     feast = get_todays_feast()
@@ -5325,8 +5353,9 @@ async def get_prayer_of_day() -> str:
         f"Напиши православную молитву дня. {context} "
         f"Дата: {day_str}. "
         "Молитва должна быть тёплой, душевной, 8-15 строк. "
-        "Начни с обращения к Господу или Богородице. Заверши Аминь. "
-        "Пиши только по-русски."
+        "Пиши только обычной русской прозой. Начни сразу с обращения к Господу или Богородице. "
+        "Заверши Аминь. Не используй Markdown, заголовки, выделение, кодовые блоки, обратные кавычки, "
+        "декоративные кавычки или отдельную строку с названием молитвы."
     )
     try:
         msg = await claude_messages_create(
@@ -5335,7 +5364,7 @@ async def get_prayer_of_day() -> str:
             system="Ты православный помощник. Пишешь пример личного молитвенного обращения тепло и душевно. Не выдавай его за официальный богослужебный текст.",
             messages=[{"role": "user", "content": prompt}]
         )
-        prayer = msg.content[0].text
+        prayer = clean_daily_prayer_text(msg.content[0].text)
         # Сохраняем в кеш
         conn2 = db_connect()
         conn2.execute("INSERT OR REPLACE INTO daily_prayer_cache (date, prayer) VALUES (?,?)", (today, prayer))
@@ -5344,7 +5373,7 @@ async def get_prayer_of_day() -> str:
         return prayer
     except Exception as e:
         logging.error(f"Ошибка молитвы дня: {e}")
-        return PRAYERS["morning_ru"]["text"]
+        return clean_daily_prayer_text(PRAYERS["morning_ru"]["text"])
 
 async def morning_broadcast():
     """Утренняя рассылка всем пользователям у кого включены уведомления"""
@@ -5358,16 +5387,15 @@ async def morning_broadcast():
     feast = get_todays_feast()
     feast_line = ("\U0001f389 " + feast + "\n\n") if feast else ""
     text = (
-        "\U0001f305 *\u0414\u043e\u0431\u0440\u043e\u0435 \u0443\u0442\u0440\u043e, " + day_str + "!*\n\n"
+        "\U0001f305 Доброе утро, " + day_str + "!\n\n"
         + feast_line
-        + "\u2626\ufe0f *\u041c\u043e\u043b\u0438\u0442\u0432\u0430 \u0434\u043d\u044f*\n\n"
-        + prayer
-        + "\n\n─────────────\n🙏 Все молитвы → @Moya\\_Vera\\_bot"
+        + "\u2626\ufe0f Молитва дня\n\n"
+        + clean_daily_prayer_text(prayer)
     )
     sent = 0
     for user_id, name in users:
         try:
-            await bot.send_message(user_id, text, parse_mode="Markdown")
+            await bot.send_message(user_id, text)
             sent += 1
             await asyncio.sleep(0.05)  # чтобы не превысить лимит Telegram
         except Exception:
