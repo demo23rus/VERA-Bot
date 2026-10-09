@@ -4,11 +4,8 @@ import subprocess
 import time
 import urllib.parse
 import urllib.request
-from datetime import datetime
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
-MOSCOW = ZoneInfo("Europe/Moscow")
 ENV_FILE = Path("/root/.env_vera")
 STATE_FILE = Path("/root/.vera_monitoring_state.json")
 REMINDER_SECONDS = 6 * 60 * 60
@@ -180,14 +177,7 @@ def main():
         previous_ok = previous.get("ok")
         last_alert = float(previous.get("last_alert", 0) or 0)
 
-        if ok and previous_ok is False:
-            notify(
-                f"✅ {cfg['title']} восстановлен\n\n"
-                f"Сервис: {cfg['service']}\n"
-                f"Heartbeat: {age} сек."
-            )
-            last_alert = now
-        elif not ok and (
+        if not ok and (
             previous_ok is not False or now - last_alert >= REMINDER_SECONDS
         ):
             notify(
@@ -205,16 +195,6 @@ def main():
             "heartbeat_age": age,
             "reasons": reasons,
         }
-
-    now_msk = datetime.now(MOSCOW)
-    today = now_msk.strftime("%Y-%m-%d")
-    if now_msk.hour >= 9 and state.get("daily_report_date") != today:
-        lines = ["🛡 Ежедневный отчёт «С верой»", ""]
-        for key, cfg in BOTS.items():
-            icon = "✅" if state.get(key, {}).get("ok") else "❌"
-            lines.append(f"{icon} {cfg['title']}")
-        notify("\n".join(lines))
-        state["daily_report_date"] = today
 
     save_state(state)
 
