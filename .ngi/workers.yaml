@@ -32,7 +32,7 @@ workers:
     role: automatic_fallback
     timeout_seconds: 600
   claude_code:
-    enabled: true
+    enabled: false
     automatic: false
     priority: 3
     executable: /root/.local/bin/claude
