@@ -55,3 +55,7 @@
 - Quota/credit/execution failures may trigger fallback; product blockers do not.
 - Before fallback, preserve diagnostics and reset the isolated worktree to the recorded clean base.
 - Router never purchases credits or paid overage.
+
+
+## GPU routing owner decision 2026-10-11
+Primary implementation: Hermes/Qwen3.8 through the private GPU bridge. Existing Router supports gpu_local; automatic cloud fallback is disabled. Coordinator reviews exact diff and focused tests. Earlier Kimi/Codex defaults are superseded; product protections and deploy contracts remain. Rollback: restore .ngi/workers.before-gpu.yaml to workers.yaml as a reviewed Git change.

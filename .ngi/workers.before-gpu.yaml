@@ -1,0 +1,54 @@
+schema_version: 2
+project: Vera
+mode: economical
+
+policy:
+  primary_worker: kimi_code
+  fallback_order:
+    - codex
+    - claude_code
+  same_worker_repair_attempts: 1
+  automatic_fallback_on:
+    - quota_or_credit_failure
+    - execution_unavailable
+  reviewer: chat_github_dc
+  context_mode: coordinator_narrow_preflight
+  broad_repository_scan_by_default: false
+
+workers:
+  kimi_code:
+    enabled: true
+    automatic: true
+    priority: 1
+    executable: /root/.kimi-code/bin/kimi
+    provider: kimi_ai
+    role: implementation
+    timeout_seconds: 1800
+
+  kimi_work:
+    enabled: false
+    automatic: false
+    role: desktop_optional
+
+  codex:
+    enabled: true
+    automatic: true
+    priority: 2
+    executable: /root/.local/bin/codex
+    role: automatic_fallback
+    timeout_seconds: 600
+
+  claude_code:
+    enabled: true
+    automatic: true
+    priority: 3
+    executable: /root/.local/bin/claude
+    role: automatic_fallback
+    available_after: "2026-10-01T00:00:00+03:00"
+    timeout_seconds: 1800
+
+cost_policy:
+  auto_purchase_by_router: forbidden
+  quota_or_credit_failure: mark_unavailable_and_fallback
+  dirty_worktree_handoff: forbidden
+  fallback_reset: known_clean_base_sha

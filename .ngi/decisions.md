@@ -31,3 +31,7 @@ Implementation workers receive exact files/symbols/contracts/focused tests up fr
 
 ## D010 — Current Telegram webhook conflict is operational debt, not a reason to rewrite unrelated code
 As of 2026-09-28, `vera-bot.service` logs `TelegramConflictError` because webhook and long polling conflict. Resolve as a separate operational JOB; do not mix it into unrelated feature work.
+
+
+## GPU routing owner decision 2026-10-11
+Primary implementation: Hermes/Qwen3.8 through the private GPU bridge. Existing Router supports gpu_local; automatic cloud fallback is disabled. Coordinator reviews exact diff and focused tests. Earlier Kimi/Codex defaults are superseded; product protections and deploy contracts remain. Rollback: restore .ngi/workers.before-gpu.yaml to workers.yaml as a reviewed Git change.

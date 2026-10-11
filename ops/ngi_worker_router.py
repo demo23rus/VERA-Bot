@@ -293,7 +293,13 @@ def run_worker(job_dir: Path, meta: dict[str, Any], worker_name: str, *, repair:
 
     timeout_seconds = int(worker.get("timeout_seconds") or 1800)
     try:
-        if worker_name == "kimi_code":
+        if worker_name == "gpu_local":
+            cmd = [exe, "/root/ngi-ai-studio-controller/gpu_worker.py",
+                   "--worktree", meta["worktree"], "--prompt-file", str(job_dir / f"{suffix}_prompt.txt")]
+            p = run(cmd, Path(meta["worktree"]), check=False, timeout=timeout_seconds, stdin_devnull=True)
+            stdout, stderr = p.stdout or "", p.stderr or ""
+            final_text = stdout
+        elif worker_name == "kimi_code":
             cmd = [exe, "--prompt", prompt, "--output-format", "text"]
             p = run(cmd, Path(meta["worktree"]), check=False, timeout=timeout_seconds, stdin_devnull=True)
             stdout = p.stdout or ""
@@ -607,11 +613,11 @@ def main() -> int:
     p = sub.add_parser("status")
     p.set_defaults(func=cmd_status)
     p = sub.add_parser("pause")
-    p.add_argument("--worker", required=True, choices=["kimi_code", "codex", "claude_code"])
+    p.add_argument("--worker", required=True, choices=["gpu_local", "kimi_code", "codex", "claude_code"])
     p.add_argument("--reason", default="")
     p.set_defaults(func=cmd_pause)
     p = sub.add_parser("resume")
-    p.add_argument("--worker", required=True, choices=["kimi_code", "codex", "claude_code"])
+    p.add_argument("--worker", required=True, choices=["gpu_local", "kimi_code", "codex", "claude_code"])
     p.set_defaults(func=cmd_resume)
     args = parser.parse_args()
     return int(args.func(args))
