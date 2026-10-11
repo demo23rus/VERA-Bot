@@ -44,7 +44,7 @@ workers:
     automatic: true
     priority: 0
     executable: /usr/bin/python3
-    timeout_seconds: 600
+    timeout_seconds: 5000
 cost_policy:
   auto_purchase_by_router: forbidden
   quota_or_credit_failure: mark_unavailable_and_fallback

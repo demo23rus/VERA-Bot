@@ -35,3 +35,7 @@ As of 2026-09-28, `vera-bot.service` logs `TelegramConflictError` because webhoo
 
 ## GPU routing owner decision 2026-10-11
 Primary implementation: Hermes/Qwen3.8 through the private GPU bridge. Existing Router supports gpu_local; automatic cloud fallback is disabled. Coordinator reviews exact diff and focused tests. Earlier Kimi/Codex defaults are superseded; product protections and deploy contracts remain. Rollback: restore .ngi/workers.before-gpu.yaml to workers.yaml as a reviewed Git change.
+
+
+## 2026-10-11 — Shared GPU queue timeout
+Owner authorized a shared FIFO inference queue for Hermes and chat workers. gpu_local Router timeout is 5000 seconds to cover bounded queue waits, implementation (3600 s) and independent review (1200 s). Other workers, fallback and production policy are unchanged. Controller QUEUE.md documents limits and rollback; previous gpu_local timeout was 600 s.
