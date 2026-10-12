@@ -296,7 +296,7 @@ def run_worker(job_dir: Path, meta: dict[str, Any], worker_name: str, *, repair:
         if worker_name == "gpu_local":
             cmd = [exe, "/root/ngi-ai-studio-controller/gpu_worker.py",
                    "--worktree", meta["worktree"], "--prompt-file", str(job_dir / f"{suffix}_prompt.txt")]
-            p = run(cmd, Path(meta["worktree"]), check=False, timeout=timeout_seconds, stdin_devnull=True)
+            p = run(cmd, Path(meta["worktree"]), check=False, timeout=None, stdin_devnull=True)
             stdout, stderr = p.stdout or "", p.stderr or ""
             final_text = stdout
         elif worker_name == "kimi_code":
@@ -355,6 +355,8 @@ def _diagnostic_snapshot(job_dir: Path, meta: dict[str, Any], worker_name: str) 
 
 
 def _reset_job_worktrees(meta: dict[str, Any], *, bases: dict[str, str] | None = None) -> None:
+    if meta.get("worker") == "gpu_local" or any(a.get("worker") == "gpu_local" for a in meta.get("worker_attempts", [])):
+        raise RuntimeError("Durable GPU task preserved; inspect TASK_ID instead of resetting worktree")
     wt = Path(meta["worktree"])
     base = str((bases or {}).get("repo") or meta["base_sha"])
     run(["git", "reset", "--hard", base], wt)
