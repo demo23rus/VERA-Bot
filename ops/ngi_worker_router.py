@@ -262,6 +262,9 @@ def worker_chain(cfg: dict[str, Any]) -> list[str]:
 
 
 def _classify_worker_output(name: str, p: subprocess.CompletedProcess[str], final_text: str, combined: str) -> tuple[str, str]:
+    # Local GPU failures are task results, never subscription quotas or fallback resets.
+    if name == "gpu_local" and p.returncode:
+        return "WORKER_BLOCKED", combined
     if p.returncode != 0:
         if QUOTA_RE.search(combined):
             set_worker_state(name, "paused", "quota_or_credit_failure")
