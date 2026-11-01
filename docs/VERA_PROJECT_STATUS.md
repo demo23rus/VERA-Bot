@@ -42,3 +42,4 @@
 - Telegram + MAX assistants, owner cabinet, landing, analytics and current production features are accepted baseline unless a new reproducible defect is shown.
 - Recent accepted features include «🕯️ Моя духовная неделя» and «⛪ Моё воскресенье».
 - «⛪ Моё воскресенье» Telegram/MAX contract is focused-test accepted and DONE/CLOSED; no manual live acceptance remains as NEXT.
+- Prayer library expanded in Telegram/MAX: new «📚 Ещё молитвы» section and «📖 Акафисты» catalog with verified full-text links.

@@ -2455,6 +2455,81 @@ PRAYERS = {
             "по молитвослову или православному приложению."
         )
     },
+    "heavenly_king": {
+        "title": "☁️ Царю Небесный",
+        "text": (
+            "Царю Небесный, Утешителю, Душе истины, Иже везде сый и вся исполняяй,\n"
+            "Сокровище благих и жизни Подателю, прииди и вселися в ны,\n"
+            "и очисти ны от всякия скверны, и спаси, Блаже, души наша."
+        )
+    },
+    "trisagion": {
+        "title": "✝️ Трисвятое",
+        "text": (
+            "Святый Боже, Святый Крепкий, Святый Безсмертный, помилуй нас.\n"
+            "Святый Боже, Святый Крепкий, Святый Безсмертный, помилуй нас.\n"
+            "Святый Боже, Святый Крепкий, Святый Безсмертный, помилуй нас."
+        )
+    },
+    "worthy": {
+        "title": "🌸 Достойно есть",
+        "text": (
+            "Достойно есть яко воистину блажити Тя, Богородицу,\n"
+            "Присноблаженную и Пренепорочную и Матерь Бога нашего.\n"
+            "Честнейшую Херувим и славнейшую без сравнения Серафим,\n"
+            "без истления Бога Слова рождшую, сущую Богородицу, Тя величаем."
+        )
+    },
+    "guardian_angel": {
+        "title": "👼 Ангелу Хранителю",
+        "text": (
+            "Ангеле Христов, хранителю мой святый и покровителю души и тела моего,\n"
+            "вся ми прости, елика согреших во днешний день,\n"
+            "и от всякого лукавствия противного ми врага избави мя,\n"
+            "да ни в коем же гресе прогневаю Бога моего;\n"
+            "но моли за мя, грешного и недостойного раба,\n"
+            "яко да достойна мя покажеши благости и милости Всесвятыя Троицы\n"
+            "и Матере Господа моего Иисуса Христа и всех святых. Аминь."
+        )
+    },
+    "otche": {
+        "title": "🙏 Отче наш",
+        "text": (
+            "Отче наш, Иже еси на небесех!\nДа святится имя Твое,\n"
+            "да приидет Царствие Твое,\nда будет воля Твоя,\n"
+            "яко на небеси и на земли.\nХлеб наш насущный даждь нам днесь;\n"
+            "и остави нам долги наша,\\някоже и мы оставляем должником нашим;\n"
+            "и не введи нас во искушение,\nно избави нас от лукаваго. Аминь."
+        )
+    },
+    "bogorodice": {
+        "title": "🌸 Богородице Дево",
+        "text": (
+            "Богородице Дево, радуйся,\nБлагодатная Марие, Господь с Тобою;\n"
+            "благословена Ты в женах\nи благословен плод чрева Твоего,\n"
+            "яко Спаса родила еси душ наших."
+        )
+    },
+    "jesus": {
+        "title": "📿 Иисусова молитва",
+        "text": "Господи Иисусе Христе, Сыне Божий, помилуй мя, грешного."
+    },
+    "symbol": {
+        "title": "✝️ Символ веры",
+        "text": "Верую во единого Бога Отца, Вседержителя, Творца небу и земли, видимым же всем и невидимым.\nИ во единого Господа Иисуса Христа, Сына Божия, Единородного, Иже от Отца рожденного прежде всех век; Света от Света, Бога истинна от Бога истинна, рожденна, несотворенна, единосущна Отцу, Имже вся быша.\nНас ради человек и нашего ради спасения сшедшаго с небес, и воплотившагося от Духа Свята и Марии Девы, и вочеловечшася.\nРаспятаго же за ны при Понтийстем Пилате, и страдавша, и погребенна.\nИ воскресшаго в третий день по Писанием.\nИ восшедшаго на небеса, и седяща одесную Отца.\nИ паки грядущаго со славою судити живым и мертвым, Егоже Царствию не будет конца.\nИ в Духа Святаго, Господа, Животворящаго, Иже от Отца исходящаго, Иже со Отцем и Сыном спокланяема и сславима, глаголавшаго пророки.\nВо едину Святую, Соборную и Апостольскую Церковь.\nИсповедую едино крещение во оставление грехов.\nЧаю воскресения мертвых, и жизни будущаго века. Аминь."
+    },
+
+
+}
+
+
+AKATHISTS = {
+    "jesus": ("☦️ Акафист Иисусу Сладчайшему", "https://azbyka.ru/molitvoslov/akafist-iisusu-sladchajshemu.html"),
+    "bogorodica": ("🌸 Акафист Пресвятой Богородице", "https://azbyka.ru/molitvoslov/akafist-presvjatoj-bogorodice-velikij-akafist-chitaemyj-v-subbotu-akafista.html"),
+    "nikolay": ("🕯️ Акафист Николаю Чудотворцу", "https://azbyka.ru/molitvoslov/akafist-svjatitelju-nikolaju-chudotvorcu.html"),
+    "matrona": ("🌺 Акафист Матроне Московской", "https://azbyka.ru/molitvoslov/akafist-svjatoj-pravednoj-matrone-moskovskoj.html"),
+    "panteleimon": ("💛 Акафист Пантелеимону Целителю", "https://azbyka.ru/molitvoslov/akafist-svjatomu-velikomucheniku-i-celitelju-panteleimonu.html"),
+    "spiridon": ("🕯️ Акафист Спиридону Тримифунтскому", "https://azbyka.ru/molitvoslov/akafist-svjatitelju-spiridonu-trimifuntskomu-chudotvorcu.html"),
 }
 
 # ========== КОНТЕНТ — ТАИНСТВА ==========
@@ -3588,8 +3663,27 @@ def prayers_menu():
             InlineKeyboardButton(text="✝️ Правило ко Причастию", callback_data="prayer_prichaschenie"),
             InlineKeyboardButton(text="📖 Канон покаянный",      callback_data="prayer_pokayanny_kanon"),
         ],
+        [
+            InlineKeyboardButton(text="📚 Ещё молитвы", callback_data="more_prayers"),
+            InlineKeyboardButton(text="📖 Акафисты", callback_data="akathists"),
+        ],
         [InlineKeyboardButton(text="◀️ Главное меню", callback_data="main_menu")],
     ])
+
+def more_prayers_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="☁️ Царю Небесный", callback_data="prayer_heavenly_king"), InlineKeyboardButton(text="✝️ Трисвятое", callback_data="prayer_trisagion")],
+        [InlineKeyboardButton(text="🌸 Достойно есть", callback_data="prayer_worthy"), InlineKeyboardButton(text="👼 Ангелу Хранителю", callback_data="prayer_guardian_angel")],
+        [InlineKeyboardButton(text="🙏 Отче наш", callback_data="prayer_otche"), InlineKeyboardButton(text="🌸 Богородице Дево", callback_data="prayer_bogorodice")],
+        [InlineKeyboardButton(text="📿 Иисусова молитва", callback_data="prayer_jesus"), InlineKeyboardButton(text="✝️ Символ веры", callback_data="prayer_symbol")],
+        [InlineKeyboardButton(text="◀️ К молитвам", callback_data="prayers")],
+    ])
+
+def akathists_menu():
+    return InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text=title, callback_data=f"akathist_{key}")]
+        for key, (title, _url) in AKATHISTS.items()
+    ] + [[InlineKeyboardButton(text="◀️ К молитвам", callback_data="prayers")]])
 
 def sacraments_menu():
     return InlineKeyboardMarkup(inline_keyboard=[
@@ -6827,6 +6921,46 @@ async def cb_prayer_of_day(callback: CallbackQuery):
             [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
         ])
     )
+
+@dp.callback_query(F.data == "more_prayers")
+async def cb_more_prayers(callback: CallbackQuery):
+    await callback.message.answer(
+        "📚 *Ещё молитвы*\n\nВыберите молитву:",
+        parse_mode="Markdown",
+        reply_markup=more_prayers_menu(),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data == "akathists")
+async def cb_akathists(callback: CallbackQuery):
+    await callback.message.answer(
+        "📖 *Акафисты*\n\nВыберите акафист. Полный текст откроется в проверенном православном молитвослове «Азбука веры».",
+        parse_mode="Markdown",
+        reply_markup=akathists_menu(),
+    )
+    await callback.answer()
+
+
+@dp.callback_query(F.data.startswith("akathist_"))
+async def cb_akathist(callback: CallbackQuery):
+    key = callback.data.replace("akathist_", "", 1)
+    item = AKATHISTS.get(key)
+    if not item:
+        await callback.answer("Акафист не найден")
+        return
+    title, url = item
+    await callback.message.answer(
+        f"*{title}*\n\nПолный текст доступен в православном молитвослове «Азбука веры».",
+        parse_mode="Markdown",
+        reply_markup=InlineKeyboardMarkup(inline_keyboard=[
+            [InlineKeyboardButton(text="📖 Читать полный текст", url=url)],
+            [InlineKeyboardButton(text="◀️ К акафистам", callback_data="akathists")],
+            [InlineKeyboardButton(text="🏠 Главное меню", callback_data="main_menu")],
+        ]),
+    )
+    await callback.answer()
+
 
 @dp.callback_query(F.data.startswith("prayer_"))
 async def cb_prayer(callback: CallbackQuery):

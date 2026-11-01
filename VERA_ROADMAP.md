@@ -24,6 +24,7 @@
 - «⛪ Моё воскресенье» Telegram/MAX acceptance coverage and polling-recovery closure.
 - NGI Autonomous Development Standard v1 migration and economical Worker Router.
 - Telegram webhook/long-polling conflict resolution.
+- Prayer library expansion: more prayers plus «📖 Акафисты» in Telegram and MAX.
 
 ## IDEAS
 - Optional Saturday reminder for «Моё воскресенье» only after manual acceptance.
